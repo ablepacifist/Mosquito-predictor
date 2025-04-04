@@ -1,0 +1,24 @@
+# Visual Studio files
+.vs/
+*.suo
+*.vcxproj.user
+*.VC.db
+
+# Visual Studio Code settings
+.vscode/
+
+# CMake build directory
+/build/
+build/
+
+# Executables and build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+*.o
+*.obj
+*.pdb
+
+# Other common files
+*.log
