@@ -1,4 +1,4 @@
-#include "preprocess.h"
+#include "../include/preprocess.h"
 #include <iostream>
 #include <vector>
 #include <string>
@@ -543,3 +543,138 @@ void splitData(const std::vector<std::vector<double>> &X_weather,
         }
     }
 }
+
+/**
+ * @brief Parse the raw DipCount column as continuous values for regression.
+ * @param doc The rapidcsv::Document object representing the CSV file.
+ * @return A vector of float values representing the raw DipCount (with missing values interpolated).
+ */
+std::vector<float> parseDipCountReg(rapidcsv::Document &doc) {
+    std::vector<float> dipCount;
+    try {
+        std::vector<std::string> dipCountRaw = doc.GetColumn<std::string>("DipCount");
+        for (const auto &value : dipCountRaw) {
+            try {
+                dipCount.push_back(std::stof(value));
+            } catch (...) {
+                dipCount.push_back(NAN); // Mark missing/invalid values as NaN.
+            }
+        }
+    } catch (const std::exception &e) {
+        throw std::runtime_error("Error parsing 'DipCount' column for regression: " + std::string(e.what()));
+    }
+
+    // Interpolate missing values to preserve continuity.
+    interpolateColumn(dipCount);
+    return dipCount;
+}
+
+/**
+ * @brief Split data into training, validation, and test sets, with labels as floats for regression.
+ * @param X_weather The weather features.
+ * @param X_site The site features.
+ * @param y A vector of continuous labels.
+ * @param X_weather_train Output: Weather training data.
+ * @param X_site_train Output: Site training data.
+ * @param y_train Output: Training labels (floats).
+ * @param X_weather_val Output: Weather validation data.
+ * @param X_site_val Output: Site validation data.
+ * @param y_val Output: Validation labels (floats).
+ * @param X_weather_test Output: Weather test data.
+ * @param X_site_test Output: Site test data.
+ * @param y_test Output: Test labels (floats).
+ */
+void splitDataRegression(const std::vector<std::vector<double>> &X_weather, 
+                         const std::vector<std::vector<double>> &X_site, 
+                         const std::vector<float> &y,
+                         std::vector<std::vector<double>> &X_weather_train, 
+                         std::vector<std::vector<double>> &X_site_train, 
+                         std::vector<float> &y_train,
+                         std::vector<std::vector<double>> &X_weather_val, 
+                         std::vector<std::vector<double>> &X_site_val, 
+                         std::vector<float> &y_val,
+                         std::vector<std::vector<double>> &X_weather_test, 
+                         std::vector<std::vector<double>> &X_site_test, 
+                         std::vector<float> &y_test)
+{
+    size_t dataSize = y.size();
+    if (dataSize == 0) return;
+
+    // Use 70% for training.
+    size_t trainSize = static_cast<size_t>(std::floor(dataSize * 0.7));
+    // Split the rest equally between validation and test.
+    size_t remaining = dataSize - trainSize;
+    size_t valSize = static_cast<size_t>(std::round(remaining * 0.5));
+    size_t testSize = remaining - valSize;
+
+    for (size_t i = 0; i < dataSize; i++) {
+        if (i < trainSize) {
+            X_weather_train.push_back(X_weather[i]);
+            X_site_train.push_back(X_site[i]);
+            y_train.push_back(y[i]);
+        } else if (i < trainSize + valSize) {
+            X_weather_val.push_back(X_weather[i]);
+            X_site_val.push_back(X_site[i]);
+            y_val.push_back(y[i]);
+        } else {
+            X_weather_test.push_back(X_weather[i]);
+            X_site_test.push_back(X_site[i]);
+            y_test.push_back(y[i]);
+        }
+    }
+}
+
+/**
+ * @brief Preprocess the data from a CSV file for regression.
+ *
+ * This function reads the CSV file, parses weather features, site features, and continuous dip count labels,
+ * performs standard scaling, and splits the data into training, validation, and test sets.
+ *
+ * @param filePath The path to the CSV file.
+ * @param X_weather_train Output: Weather training data.
+ * @param X_site_train Output: Site training data.
+ * @param y_train Output: Training labels (as floats).
+ * @param X_weather_val Output: Weather validation data.
+ * @param X_site_val Output: Site validation data.
+ * @param y_val Output: Validation labels (as floats).
+ * @param X_weather_test Output: Weather test data.
+ * @param X_site_test Output: Site test data.
+ * @param y_test Output: Test labels (as floats).
+ */
+void preprocessDataRegression(const std::string &filePath,
+                              std::vector<std::vector<double>> &X_weather_train, 
+                              std::vector<std::vector<double>> &X_site_train, 
+                              std::vector<float> &y_train,
+                              std::vector<std::vector<double>> &X_weather_val, 
+                              std::vector<std::vector<double>> &X_site_val, 
+                              std::vector<float> &y_val,
+                              std::vector<std::vector<double>> &X_weather_test, 
+                              std::vector<std::vector<double>> &X_site_test, 
+                              std::vector<float> &y_test)
+{
+    try {
+        // Load the CSV file.
+        rapidcsv::Document doc(filePath);
+
+        // Parse continuous DipCount for regression.
+        auto y = parseDipCountReg(doc);
+
+        // Parse weather and site features.
+        auto X_weather = parseWeatherFeatures(doc);
+        auto X_site = parseSiteFeatures(doc);
+
+        // Normalize numeric features.
+        standardScale(X_weather);
+        standardScale(X_site);
+
+        // Split the data into training, validation, and test sets.
+        splitDataRegression(X_weather, X_site, y, 
+                            X_weather_train, X_site_train, y_train,
+                            X_weather_val, X_site_val, y_val,
+                            X_weather_test, X_site_test, y_test);
+    } catch (const std::exception &e) {
+        std::cerr << "Error in preprocessDataRegression: " << e.what() << std::endl;
+        throw; // Re-throw for debugging purposes.
+    }
+}
+

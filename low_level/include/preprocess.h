@@ -9,14 +9,14 @@
 // Structure to hold the preprocessed data
 struct PreprocessedData {
     std::vector<float> X_weather_cnn;             // Flattened weather data
-    std::vector<std::vector<double>> X_site;      // Site data matrix
-    std::vector<int> labels;                      // Breeding labels (0 or 1)
-    std::vector<int> trainIndices;                // Indices for training samples
-    std::vector<int> valIndices;                  // Indices for validation samples
-    std::vector<int> testIndices;                 // Indices for test samples
+    std::vector<std::vector<double>> X_site;        // Site data matrix
+    std::vector<int> labels;                        // Breeding labels (0 or 1)
+    std::vector<int> trainIndices;                  // Indices for training samples
+    std::vector<int> valIndices;                    // Indices for validation samples
+    std::vector<int> testIndices;                   // Indices for test samples
 };
 
-// Function declarations
+// --- Common Preprocessing Declarations ---
 std::tm parseDate(const std::string &dateStr);
 int dateToOrdinal(const std::tm &tm);
 void standardScale(std::vector<std::vector<double>> &data);
@@ -28,16 +28,60 @@ std::vector<int> parseLabels(rapidcsv::Document &doc);
 std::vector<std::vector<double>> parseWeatherFeatures(rapidcsv::Document &doc);
 std::vector<std::vector<double>> parseSiteFeatures(rapidcsv::Document &doc);
 
-void splitData(const std::vector<std::vector<double>> &X_weather, const std::vector<std::vector<double>> &X_site, const std::vector<int> &y,
-               std::vector<std::vector<double>> &X_weather_train, std::vector<std::vector<double>> &X_site_train, std::vector<int> &y_train,
-               std::vector<std::vector<double>> &X_weather_val, std::vector<std::vector<double>> &X_site_val, std::vector<int> &y_val,
-               std::vector<std::vector<double>> &X_weather_test, std::vector<std::vector<double>> &X_site_test, std::vector<int> &y_test);
+void splitData(const std::vector<std::vector<double>> &X_weather, 
+               const std::vector<std::vector<double>> &X_site, 
+               const std::vector<int> &y,
+               std::vector<std::vector<double>> &X_weather_train, 
+               std::vector<std::vector<double>> &X_site_train, 
+               std::vector<int> &y_train,
+               std::vector<std::vector<double>> &X_weather_val, 
+               std::vector<std::vector<double>> &X_site_val, 
+               std::vector<int> &y_val,
+               std::vector<std::vector<double>> &X_weather_test, 
+               std::vector<std::vector<double>> &X_site_test, 
+               std::vector<int> &y_test);
 
 void preprocessData(const std::string &filePath,
-    std::vector<std::vector<double>> &X_weather_train, std::vector<std::vector<double>> &X_site_train, std::vector<int> &y_train,
-    std::vector<std::vector<double>> &X_weather_val, std::vector<std::vector<double>> &X_site_val, std::vector<int> &y_val,
-    std::vector<std::vector<double>> &X_weather_test, std::vector<std::vector<double>> &X_site_test, std::vector<int> &y_test);
+    std::vector<std::vector<double>> &X_weather_train, 
+    std::vector<std::vector<double>> &X_site_train, 
+    std::vector<int> &y_train,
+    std::vector<std::vector<double>> &X_weather_val, 
+    std::vector<std::vector<double>> &X_site_val, 
+    std::vector<int> &y_val,
+    std::vector<std::vector<double>> &X_weather_test, 
+    std::vector<std::vector<double>> &X_site_test, 
+    std::vector<int> &y_test);
 
 std::vector<std::string> getColumnWithDefault(rapidcsv::Document &doc, const std::string &columnName, const std::string &defaultValue);
+
+// --- Regression Preprocessing Declarations ---
+// Parse the DipCount column as continuous values (for regression)
+std::vector<float> parseDipCountReg(rapidcsv::Document &doc);
+
+// Split data into training, validation, and test sets, using float labels.
+void splitDataRegression(const std::vector<std::vector<double>> &X_weather, 
+                         const std::vector<std::vector<double>> &X_site, 
+                         const std::vector<float> &y,
+                         std::vector<std::vector<double>> &X_weather_train, 
+                         std::vector<std::vector<double>> &X_site_train, 
+                         std::vector<float> &y_train,
+                         std::vector<std::vector<double>> &X_weather_val, 
+                         std::vector<std::vector<double>> &X_site_val, 
+                         std::vector<float> &y_val,
+                         std::vector<std::vector<double>> &X_weather_test, 
+                         std::vector<std::vector<double>> &X_site_test, 
+                         std::vector<float> &y_test);
+
+// Full preprocessing for regression data.
+void preprocessDataRegression(const std::string &filePath,
+                              std::vector<std::vector<double>> &X_weather_train, 
+                              std::vector<std::vector<double>> &X_site_train, 
+                              std::vector<float> &y_train,
+                              std::vector<std::vector<double>> &X_weather_val, 
+                              std::vector<std::vector<double>> &X_site_val, 
+                              std::vector<float> &y_val,
+                              std::vector<std::vector<double>> &X_weather_test, 
+                              std::vector<std::vector<double>> &X_site_test, 
+                              std::vector<float> &y_test);
 
 #endif // PREPROCESS_H

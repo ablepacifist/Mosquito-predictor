@@ -242,10 +242,6 @@ void CNNModel::forward() {
     globalAveragePoolingForward(cudnn, netRes.convOutDesc, netRes.d_activation_output,
                                 gapOutputDesc, d_gap_output);
     CUDA_CHECK(cudaDeviceSynchronize());
-
-    // --- (DEBUG STEP) ---
-    // Optionally clear the GAP output buffer or fill with known values.
-    // Here we clear it (set all bytes to zero).
     CUDA_CHECK(cudaMemset(d_gap_output, 0, softmaxBufferSize));
     // -----------------------
 
@@ -273,7 +269,7 @@ void CNNModel::forward() {
     CUDNN_CHECK(cudnnSoftmaxForward(
         cudnn,
         CUDNN_SOFTMAX_ACCURATE,
-        CUDNN_SOFTMAX_MODE_INSTANCE,  // You can experiment with CHANNEL if needed.
+        CUDNN_SOFTMAX_MODE_INSTANCE, 
         &alpha,
         gapOutputDesc, d_gap_output,
         &beta,

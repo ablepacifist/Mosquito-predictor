@@ -17,7 +17,6 @@ set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-relaxed-constexpr")
 
 # Set the runtime output directories for builds.
-# Ensure all builds (Debug, Release, etc.) output to the root /low_level/ folder
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR})
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG ${PROJECT_SOURCE_DIR})
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${PROJECT_SOURCE_DIR})
@@ -35,9 +34,9 @@ link_directories(${PROJECT_SOURCE_DIR}/test/gtest/libs)
 file(GLOB SRC_CPP_FILES "${PROJECT_SOURCE_DIR}/src/*.cpp")
 file(GLOB SRC_CU_FILES  "${PROJECT_SOURCE_DIR}/src/*.cu")
 
-# Treat the .cpp file that launches CUDA kernels as a CUDA file.
-# Important for ensuring <<< >>> syntax is recognized by nvcc.
+# Mark files using CUDA kernel launch syntax as CUDA files.
 set_source_files_properties(${PROJECT_SOURCE_DIR}/src/cnn_model.cpp PROPERTIES LANGUAGE CUDA)
+set_source_files_properties(${PROJECT_SOURCE_DIR}/src/regression_model.cpp PROPERTIES LANGUAGE CUDA)
 
 # Combine all source files for the main executable.
 add_executable(low_level_exe ${SRC_CPP_FILES} ${SRC_CU_FILES})
