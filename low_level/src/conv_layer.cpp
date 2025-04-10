@@ -1,4 +1,4 @@
-#include "conv_layer.h"
+#include "../include/conv_layer.h"
 #include <cudnn.h>
 #include <cstdlib>
 #include <iostream>

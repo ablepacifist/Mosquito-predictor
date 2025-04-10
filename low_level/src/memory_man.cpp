@@ -1,16 +1,21 @@
 #include "../include/memory_man.h"
-#include "../include/cudnn_utils.h"  // For createTensorDescriptor, etc.
+#include "../include/cudnn_utils.h"
+#include "../include/error_checking.h"
 
-// Allocate all resources for a simple network: convolution -> activation -> pooling -> softmax.
+#include <cudnn.h>
+#include <cstdlib>
+#include <iostream>
+
 void allocateNetworkResources(cudnnHandle_t cudnn, NetworkResources &res,
-                              int batch_size, int channels, int height, int width) {
+                              int batchSize, int channels, int height, int width,
+                              int filter_out_channels) {
     // ----- Convolution Setup -----
     // Create input tensor descriptor and allocate memory for input data.
-    res.inputDesc = createTensorDescriptor(batch_size, channels, height, width, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT);
-    cudaMalloc((void**)&res.d_input, batch_size * channels * height * width * sizeof(float));
+    res.inputDesc = createTensorDescriptor(batchSize, channels, height, width, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT);
+    cudaMalloc((void**)&res.d_input, batchSize * channels * height * width * sizeof(float));
 
     // Create filter descriptor and allocate memory for filter weights.
-    int filter_out_channels = 1;  // Number of output channels
+    // Use passed filter_out_channels value.
     int filter_height = 3, filter_width = 3;
     res.filterDesc = createFilterDescriptor(filter_out_channels, channels, filter_height, filter_width, CUDNN_DATA_FLOAT, CUDNN_TENSOR_NCHW);
     cudaMalloc((void**)&res.d_filter, filter_out_channels * channels * filter_height * filter_width * sizeof(float));
@@ -28,14 +33,12 @@ void allocateNetworkResources(cudnnHandle_t cudnn, NetworkResources &res,
     cudaMalloc(&res.d_workspace, res.workspaceSize);
 
     // ----- Activation Setup -----
-    // Create activation descriptor and allocate memory for activation output.
     cudnnCreateActivationDescriptor(&res.actDesc);
     cudnnSetActivationDescriptor(res.actDesc, CUDNN_ACTIVATION_RELU, CUDNN_PROPAGATE_NAN, 0.0);
     size_t actSize = conv_out_n * conv_out_c * conv_out_h * conv_out_w * sizeof(float);
     cudaMalloc((void**)&res.d_activation_output, actSize);
 
     // ----- Pooling Setup -----
-    // Create pooling descriptor and calculate output dimensions.
     cudnnCreatePoolingDescriptor(&res.poolDesc);
     cudnnSetPooling2dDescriptor(res.poolDesc, CUDNN_POOLING_MAX, CUDNN_PROPAGATE_NAN, 2, 2, 0, 0, 2, 2);
     int pool_out_n, pool_out_c, pool_out_h, pool_out_w;
@@ -48,9 +51,7 @@ void allocateNetworkResources(cudnnHandle_t cudnn, NetworkResources &res,
     cudaMalloc((void**)&res.d_softmax_output, poolSize);
 }
 
-// Release all resources allocated above.
 void cleanupNetworkResources(cudnnHandle_t cudnn, NetworkResources &res) {
-    // Destroy tensor descriptors and free memory for input data.
     cudnnDestroyTensorDescriptor(res.inputDesc);
     cudnnDestroyFilterDescriptor(res.filterDesc);
     cudnnDestroyConvolutionDescriptor(res.convDesc);
@@ -60,15 +61,12 @@ void cleanupNetworkResources(cudnnHandle_t cudnn, NetworkResources &res) {
     cudaFree(res.d_conv_output);
     cudaFree(res.d_workspace);
 
-    // Destroy activation descriptor and free memory for activation output.
     cudnnDestroyActivationDescriptor(res.actDesc);
     cudaFree(res.d_activation_output);
 
-    // Destroy pooling descriptor and free memory for pooling output.
     cudnnDestroyPoolingDescriptor(res.poolDesc);
     cudnnDestroyTensorDescriptor(res.poolOutDesc);
     cudaFree(res.d_pooling_output);
 
-    // Free memory for softmax output.
     cudaFree(res.d_softmax_output);
 }

@@ -28,8 +28,10 @@ struct NetworkResources {
 };
 
 // Function to allocate resources dynamically based on input dimensions.
+// Added 'filter_out_channels' so that the allocated filter memory has the correct size.
 void allocateNetworkResources(cudnnHandle_t cudnn, NetworkResources &res,
-                              int batchSize, int channels, int height, int width);
+                              int batchSize, int channels, int height, int width,
+                              int filter_out_channels = 1);
 
 // Function to clean up allocated resources.
 void cleanupNetworkResources(cudnnHandle_t cudnn, NetworkResources &res);

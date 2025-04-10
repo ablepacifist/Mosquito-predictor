@@ -3,10 +3,17 @@
 #include "../include/cnn_model.h"
 #include "../include/conv_layer.h"
 #include "../include/activation_layer.h"
+#include "../include/global_average_pooling_layer.h"
 #include "../include/pooling_layer.h"
 #include "../include/softmax_layer.h"
 #include "../include/memory_man.h"
 #include "../include/loss_kernels.h"
+#include "../include/error_checking.h" // Include the error-checking header
+#include <vector>
+#include <random>
+#include <cuda_runtime.h>
+#include <iostream>
+#include "../include/cnn_model.h"
 #include <iostream>
 #include <cuda_runtime.h>
 #include <cmath>
@@ -21,14 +28,11 @@ extern void sgd_update(float *d_weights, const float *d_gradients,
 CNNModel::CNNModel(const int *weather_input_shape_in, const int *site_input_shape_in, int num_classes_in)
     : num_classes(num_classes_in), d_filter_grad(nullptr), d_target(nullptr)
 {
-    
     // Copy the input shapes.
-    for (int i = 0; i < 4; i++)
-    {
+    for (int i = 0; i < 4; i++) {
         weather_input_shape[i] = weather_input_shape_in[i];
     }
-    for (int i = 0; i < 2; i++)
-    {
+    for (int i = 0; i < 2; i++) {
         site_input_shape[i] = site_input_shape_in[i];
     }
     // Create the cuDNN handle.
@@ -36,20 +40,18 @@ CNNModel::CNNModel(const int *weather_input_shape_in, const int *site_input_shap
     build();
 }
 
-// Destructor
-CNNModel::~CNNModel()
-{
-    if (d_filter_grad != nullptr)
-    {
+// Destructor cleans up resources.
+CNNModel::~CNNModel() {
+    if (d_filter_grad != nullptr) {
         cudaFree(d_filter_grad);
     }
-    if (d_target != nullptr)
-    {
+    if (d_target != nullptr) {
         cudaFree(d_target);
     }
     cleanupNetworkResources(cudnn, netRes);
     cudnnDestroy(cudnn);
 }
+
 // Training routine.
 void CNNModel::train(float *X_weather_train, float *X_site_train, float *y_train,
     int num_samples, int batch_size, int epochs,
@@ -135,35 +137,26 @@ std::cout << "Training complete." << std::endl;
 }
 
 
-// Build network resources.
-#include <vector>
-#include <random>
-#include <cuda_runtime.h>
-#include <iostream>
-#include "cnn_model.h"
-
+// Build the network resources.
 void CNNModel::build() {
-    // Retrieve input dimensions.
+    // Process input dimensions.
     int batchSize = weather_input_shape[0];
     int channels  = weather_input_shape[1];
     int height    = weather_input_shape[2];
     int width     = weather_input_shape[3];
 
-    // Allocate all network resources (this creates descriptors, allocates device memory, etc.).
-    allocateNetworkResources(cudnn, netRes, batchSize, channels, height, width);
+    // Allocate network resources using num_classes as the filter output channels.
+    allocateNetworkResources(cudnn, netRes, batchSize, channels, height, width, num_classes);
 
     // --- Initialize the convolution filter weights ---
-    // Assume that your convolution layer uses a 3x3 kernel with one output channel.
-    int filter_out_channels = 1;  // as configured in allocateNetworkResources
+    // Now, filter_out_channels is num_classes.
+    int filter_out_channels = num_classes;  
     int filter_height = 3;
     int filter_width  = 3;
-    // Total number of filter elements.
     int filterSize = filter_out_channels * channels * filter_height * filter_width;
 
-    // Create a host-side vector to hold the filter weights.
+    // Create host-side vector for filter weights.
     std::vector<float> host_filter(filterSize);
-
-    // Initialize weights with a small random value in the range [-0.01, 0.01].
     float initRange = 0.01f;
     std::default_random_engine generator;
     std::uniform_real_distribution<float> distribution(-initRange, initRange);
@@ -171,7 +164,7 @@ void CNNModel::build() {
         host_filter[i] = distribution(generator);
     }
 
-    // Copy the initialized filter weights from host to the device memory.
+    // Copy the initialized filter weights from host to device.
     cudaError_t err = cudaMemcpy(netRes.d_filter,
                                  host_filter.data(),
                                  filterSize * sizeof(float),
@@ -182,9 +175,6 @@ void CNNModel::build() {
     }
 
     // --- Allocate memory for filter gradients ---
-    // Adjust the gradient size as needed. In your code, you were using:
-    // int filterSizeGrad = num_classes * channels * height * width;
-    // Ensure that 'num_classes' is correctly defined for your architecture.
     int filterSizeGrad = num_classes * channels * height * width;
     err = cudaMalloc((void **)&d_filter_grad, filterSizeGrad * sizeof(float));
     if (err != cudaSuccess) {
@@ -193,22 +183,114 @@ void CNNModel::build() {
     }
 }
 
+#include "../include/cnn_model.h"
+#include "../include/conv_layer.h"
+#include "../include/activation_layer.h"
+#include "../include/global_average_pooling_layer.h"
+#include "../include/softmax_layer.h"
+#include "../include/error_checking.h"
+#include "../include/memory_man.h"
+#include "../include/cudnn_utils.h"
+#include <cuda_runtime.h>
+#include <iostream>
 
+// Helper: Print a tensor descriptor's dimensions (for debugging)
+void printTensorDesc(const cudnnTensorDescriptor_t desc, const char* tag) {
+    cudnnDataType_t dataType;
+    int n, c, h, w;
+    int nStride, cStride, hStride, wStride;
+    CUDNN_CHECK(cudnnGetTensor4dDescriptor(desc, &dataType, &n, &c, &h, &w,
+                                             &nStride, &cStride, &hStride, &wStride));
+    std::cout << tag << " dims: N=" << n << " C=" << c 
+              << " H=" << h << " W=" << w 
+              << " [strides: " << nStride << ", " 
+              << cStride << ", " << hStride << ", " << wStride << "]" 
+              << std::endl;
+}
 
-// Forward pass: run convolution, activation, and softmax.
-void CNNModel::forward()
-{
+void CNNModel::forward() {
+    // ----- Convolution forward pass -----
     convForward(cudnn, netRes.inputDesc, netRes.d_input,
                 netRes.filterDesc, netRes.d_filter,
                 netRes.convDesc, netRes.convOutDesc, netRes.d_conv_output,
                 &netRes.workspaceSize, &netRes.d_workspace);
 
+    // ----- Activation forward pass -----
     activationForward(cudnn, netRes.actDesc, netRes.convOutDesc, netRes.d_conv_output,
                       netRes.convOutDesc, netRes.d_activation_output);
 
-    softmaxForward(cudnn, netRes.convOutDesc, netRes.d_activation_output,
-                   netRes.convOutDesc, netRes.d_softmax_output);
+    // ----- Global Average Pooling -----
+    int batchSize = weather_input_shape[0];  // e.g., 128
+    // Create a GAP descriptor for shape [batchSize, num_classes, 1, 1] in NCHW
+    cudnnTensorDescriptor_t gapOutputDesc;
+    CUDNN_CHECK(cudnnCreateTensorDescriptor(&gapOutputDesc));
+    CUDNN_CHECK(cudnnSetTensor4dDescriptor(gapOutputDesc,
+                                           CUDNN_TENSOR_NCHW,
+                                           CUDNN_DATA_FLOAT,
+                                           batchSize,
+                                           num_classes,
+                                           1,
+                                           1));
+    printTensorDesc(gapOutputDesc, "GAP descriptor (for pooling)");
+
+    // Allocate temporary device memory for the GAP output.
+    float* d_gap_output = nullptr;
+    int softmaxBufferSize = batchSize * num_classes * sizeof(float);
+    CUDA_CHECK(cudaMalloc(&d_gap_output, softmaxBufferSize));
+
+    // Execute global average pooling.
+    globalAveragePoolingForward(cudnn, netRes.convOutDesc, netRes.d_activation_output,
+                                gapOutputDesc, d_gap_output);
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    // --- (DEBUG STEP) ---
+    // Optionally clear the GAP output buffer or fill with known values.
+    // Here we clear it (set all bytes to zero).
+    CUDA_CHECK(cudaMemset(d_gap_output, 0, softmaxBufferSize));
+    // -----------------------
+
+    // ----- Softmax Forward -----
+    // Create a separate output descriptor for softmax.
+    cudnnTensorDescriptor_t softmaxOutDesc;
+    CUDNN_CHECK(cudnnCreateTensorDescriptor(&softmaxOutDesc));
+    CUDNN_CHECK(cudnnSetTensor4dDescriptor(softmaxOutDesc,
+                                           CUDNN_TENSOR_NCHW,
+                                           CUDNN_DATA_FLOAT,
+                                           batchSize,
+                                           num_classes,
+                                           1,
+                                           1));
+    printTensorDesc(gapOutputDesc, "GAP descriptor (before softmax)");
+    printTensorDesc(softmaxOutDesc, "Softmax output descriptor");
+
+    // Allocate temporary memory for softmax outputs.
+    float* d_softmax_out_temp = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_softmax_out_temp, softmaxBufferSize));
+
+    // Call softmax. Here we try using INSTANCE mode.
+    float alpha = 1.0f;
+    float beta  = 0.0f;
+    CUDNN_CHECK(cudnnSoftmaxForward(
+        cudnn,
+        CUDNN_SOFTMAX_ACCURATE,
+        CUDNN_SOFTMAX_MODE_INSTANCE,  // You can experiment with CHANNEL if needed.
+        &alpha,
+        gapOutputDesc, d_gap_output,
+        &beta,
+        softmaxOutDesc, d_softmax_out_temp));
+
+    // Replace the old softmax output buffer; free it if it's already allocated.
+    if (netRes.d_softmax_output != nullptr) {
+        CUDA_CHECK(cudaFree(netRes.d_softmax_output));
+    }
+    netRes.d_softmax_output = d_softmax_out_temp;
+
+    // Clean up temporary resources.
+    cudnnDestroyTensorDescriptor(gapOutputDesc);
+    cudnnDestroyTensorDescriptor(softmaxOutDesc);
+    cudaFree(d_gap_output);
 }
+
 
 // Backward pass (placeholder implementation):
 void CNNModel::backward()
@@ -252,64 +334,73 @@ void CNNModel::backward()
     cudaFree(d_loss_grad);
 }
 
-// Evaluation routine.
-float CNNModel::evaluate(float *X_weather_test, float *X_site_test, float *y_test, int num_test_samples)
-{
-    int imageSize = weather_input_shape[1] * weather_input_shape[2] * weather_input_shape[3];
+float CNNModel::evaluate(float *X_weather_test, float *X_site_test, 
+    float *y_test, int num_test_samples) {
+int imageSize = weather_input_shape[1] * weather_input_shape[2] * weather_input_shape[3];
+int batchSize = weather_input_shape[0]; // allocated size from training
 
-    // Copy test images to the device.
-    cudaMemcpy(netRes.d_input, X_weather_test, num_test_samples * imageSize * sizeof(float), cudaMemcpyHostToDevice);
+int numCorrect = 0;
+int totalProcessed = 0;
 
-    // Forward pass: Perform inference for the test set.
-    forward();
+// Process the test set in mini-batches.
+while (totalProcessed < num_test_samples) {
+// Compute the current batch size (may be less than training batch size on the last batch)
+int currentBatch = std::min(batchSize, num_test_samples - totalProcessed);
 
-    // Allocate memory to fetch the model's predictions from the device.
-    float *h_predictions = new float[num_test_samples * num_classes]; // Host buffer
-    cudaMemcpy(h_predictions, netRes.d_softmax_output,
-               num_test_samples * num_classes * sizeof(float), cudaMemcpyDeviceToHost);
+// Copy current batch to device (assuming netRes.d_input is allocated for 'batchSize' samples)
+CUDA_CHECK(cudaMemcpy(netRes.d_input, 
+         X_weather_test + totalProcessed * imageSize, 
+         currentBatch * imageSize * sizeof(float),
+         cudaMemcpyHostToDevice));
 
-    // Calculate accuracy by comparing predictions with labels.
-    int correctPredictions = 0;
-    for (int i = 0; i < num_test_samples; i++)
-    {
-        // Find the index of the highest predicted probability for this sample.
-        int predictedLabel = -1;
-        float maxProb = -1.0f;
-        for (int j = 0; j < num_classes; j++)
-        {
-            if (h_predictions[i * num_classes + j] > maxProb)
-            {
-                maxProb = h_predictions[i * num_classes + j];
-                predictedLabel = j;
-            }
-        }
+// If you use X_site_test as well, copy accordingly.
+// Run forward() only on the current batch.
+// (You might want to modify your forward() to accept a batch size parameter;
+// if not, you can assume your network always processes full 'batchSize' samples
+// and deal with the remainder appropriately.)
+forward();
 
-        // Find the true label (one-hot encoded).
-        int trueLabel = -1;
-        for (int j = 0; j < num_classes; j++)
-        {
-            if (y_test[i * num_classes + j] == 1.0f)
-            {
-                trueLabel = j;
-                break;
-            }
-        }
+// Allocate host buffer for the current batch’s softmax outputs.
+float* h_softmax_output = new float[currentBatch * num_classes];
+CUDA_CHECK(cudaMemcpy(h_softmax_output, netRes.d_softmax_output,
+         currentBatch * num_classes * sizeof(float),
+         cudaMemcpyDeviceToHost));
 
-        // Compare predicted label with the true label.
-        if (predictedLabel == trueLabel)
-        {
-            correctPredictions++;
-        }
-    }
-
-    // Free the host buffer.
-    delete[] h_predictions;
-
-    // Compute accuracy.
-    float accuracy = static_cast<float>(correctPredictions) / num_test_samples;
-
-    return accuracy;
+// For each sample in the current batch, determine predicted label.
+for (int i = 0; i < currentBatch; i++) {
+int predictedLabel = -1;
+float maxProb = -1.0f;
+for (int j = 0; j < num_classes; j++) {
+float prob = h_softmax_output[i * num_classes + j];
+if (prob > maxProb) {
+maxProb = prob;
+predictedLabel = j;
 }
+}
+// Extract true label from y_test (assumes one-hot encoding).
+int trueLabel = -1;
+for (int j = 0; j < num_classes; j++) {
+if (y_test[(totalProcessed + i) * num_classes + j] == 1.0f) {
+trueLabel = j;
+break;
+}
+}
+if (predictedLabel == trueLabel)
+numCorrect++;
+}
+delete[] h_softmax_output;
+totalProcessed += currentBatch;
+}
+float accuracy = static_cast<float>(numCorrect) / num_test_samples;
+std::cout << "Debug: Number of correct predictions = " << numCorrect
+<< " out of " << num_test_samples << std::endl;
+return accuracy;
+}
+
+
+
+
+
 void CNNModel::updateWeights() {
     // For example, let’s say the total number of weight parameters is stored in filterSize.
     // You should compute or store this value during resource allocation.
