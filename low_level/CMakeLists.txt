@@ -37,7 +37,8 @@ file(GLOB SRC_CU_FILES  "${PROJECT_SOURCE_DIR}/src/*.cu")
 # Mark files using CUDA kernel launch syntax as CUDA files.
 set_source_files_properties(${PROJECT_SOURCE_DIR}/src/cnn_model.cpp PROPERTIES LANGUAGE CUDA)
 set_source_files_properties(${PROJECT_SOURCE_DIR}/src/regression_model.cpp PROPERTIES LANGUAGE CUDA)
-
+set_source_files_properties(${PROJECT_SOURCE_DIR}/src/dense_layer.cpp PROPERTIES LANGUAGE CUDA)
+set_source_files_properties(${PROJECT_SOURCE_DIR}/src/conv_layer.cpp PROPERTIES LANGUAGE CUDA)
 # Combine all source files for the main executable.
 add_executable(low_level_exe ${SRC_CPP_FILES} ${SRC_CU_FILES})
 set_target_properties(low_level_exe PROPERTIES 

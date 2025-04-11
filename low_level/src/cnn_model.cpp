@@ -1,417 +1,403 @@
-// cnn_model.cpp
-
 #include "../include/cnn_model.h"
 #include "../include/conv_layer.h"
-#include "../include/activation_layer.h"
-#include "../include/global_average_pooling_layer.h"
-#include "../include/pooling_layer.h"
-#include "../include/softmax_layer.h"
-#include "../include/memory_man.h"
+#include "../include/dense_layer.h"
+#include "../include/error_checking.h"
+#include "../include/optimizers.h"
+#include "../include/cudnn_utils.h"
+#include "../include/dense_kernels.h"
 #include "../include/loss_kernels.h"
-#include "../include/error_checking.h" // Include the error-checking header
+#include "../include/weight_init.h"
+
+#include <cublas_v2.h>
+#include <cuda_runtime.h>
+#include <cudnn.h>
+#include <iostream>
 #include <vector>
-#include <random>
-#include <cuda_runtime.h>
-#include <iostream>
-#include "../include/cnn_model.h"
-#include <iostream>
-#include <cuda_runtime.h>
-#include <cmath>
-#include <cstring> // for memset
+#include <cstdlib>
 
-
-extern void sgd_update(float *d_weights, const float *d_gradients,
-                       float learning_rate, int N);
-//---------------------------------------------------------------------
+//-----------------------------------------------------------------------------
+// CNNModel Implementation
+//-----------------------------------------------------------------------------
 
 // Constructor
 CNNModel::CNNModel(const int *weather_input_shape_in, const int *site_input_shape_in, int num_classes_in)
-    : num_classes(num_classes_in), d_filter_grad(nullptr), d_target(nullptr)
+    : num_classes(num_classes_in)
 {
-    // Copy the input shapes.
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 4; i++)
+    {
         weather_input_shape[i] = weather_input_shape_in[i];
     }
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 2; i++)
+    {
         site_input_shape[i] = site_input_shape_in[i];
     }
-    // Create the cuDNN handle.
-    cudnnCreate(&cudnn);
+    // Initialize pointer for backward on combined branch.
+    d_concat_dense1 = nullptr;
+
     build();
 }
 
-// Destructor cleans up resources.
-CNNModel::~CNNModel() {
-    if (d_filter_grad != nullptr) {
-        cudaFree(d_filter_grad);
-    }
-    if (d_target != nullptr) {
-        cudaFree(d_target);
-    }
-    cleanupNetworkResources(cudnn, netRes);
-    cudnnDestroy(cudnn);
-}
-
-// Training routine.
-void CNNModel::train(float *X_weather_train, float *X_site_train, float *y_train,
-    int num_samples, int batch_size, int epochs,
-    float *X_weather_val, float *X_site_val, float *y_val,
-    int num_val_samples)
+// Destructor
+CNNModel::~CNNModel()
 {
-std::cout << "Host input data (first 10 values): ";
-for (int i = 0; i < 10; i++) {
-std::cout << X_weather_train[i] << " ";
+    cleanup();
 }
-std::cout << std::endl;
 
-std::cout << "Host labels (first 10): ";
-for (int i = 0; i < 10; i++) {
-std::cout << y_train[i] << " ";
-}
-std::cout << std::endl;
-
-int num_batches = num_samples / batch_size;
-int imageSize = weather_input_shape[1] * weather_input_shape[2] * weather_input_shape[3];
-
-// Allocate device buffer for target labels if not already allocated.
-if (d_target == nullptr)
+// Build the network and allocate device inputs
+void CNNModel::build()
 {
-cudaMalloc(&d_target, batch_size * num_classes * sizeof(float));
-}
-
-// Allocate reusable memory for debugging
-float *h_debug_input = new float[batch_size * imageSize];
-float *h_debug_labels = new float[batch_size * num_classes];
-
-for (int epoch = 0; epoch < epochs; epoch++)
-{
-std::cout << "Epoch " << (epoch + 1) << " / " << epochs << std::endl;
-for (int batch = 0; batch < num_batches; batch++)
-{
-// Determine pointers for the current mini-batch.
-float *currentBatchInput = X_weather_train + batch * batch_size * imageSize;
-float *currentBatchLabels = y_train + batch * batch_size * num_classes;
-
-// Copy the mini-batch inputs and labels to the device.
-cudaMemcpy(netRes.d_input, currentBatchInput, batch_size * imageSize * sizeof(float), cudaMemcpyHostToDevice);
-cudaMemcpy(d_target, currentBatchLabels, batch_size * num_classes * sizeof(float), cudaMemcpyHostToDevice);
-
-// Debug: GPU input data after `cudaMemcpy`
-cudaMemcpy(h_debug_input, netRes.d_input, batch_size * imageSize * sizeof(float), cudaMemcpyDeviceToHost);
-std::cout << "GPU input data (first 10 values after memcpy): ";
-for (int i = 0; i < 10; i++) {
-std::cout << h_debug_input[i] << " ";
-}
-std::cout << std::endl;
-
-// Debug: GPU target labels after `cudaMemcpy`
-cudaMemcpy(h_debug_labels, d_target, batch_size * num_classes * sizeof(float), cudaMemcpyDeviceToHost);
-std::cout << "GPU target labels (first 10 after memcpy): ";
-for (int i = 0; i < 10; i++) {
-std::cout << h_debug_labels[i] << " ";
-}
-std::cout << std::endl;
-
-// Forward pass.
-forward();
-
-// Backward pass.
-backward();
-
-// Update network weights.
-updateWeights();
-
-std::cout << "\rBatch " << (batch + 1) << " / " << num_batches << std::flush;
-}
-
-float val_accuracy = evaluate(X_weather_val, X_site_val, y_val, num_val_samples);
-std::cout << "Validation accuracy: " << val_accuracy << std::endl;
-std::cout << "End of epoch " << (epoch + 1) << std::endl;
-}
-
-// Free allocated debug memory
-delete[] h_debug_input;
-delete[] h_debug_labels;
-
-std::cout << "Training complete." << std::endl;
-}
-
-
-// Build the network resources.
-void CNNModel::build() {
-    // Process input dimensions.
     int batchSize = weather_input_shape[0];
-    int channels  = weather_input_shape[1];
-    int height    = weather_input_shape[2];
-    int width     = weather_input_shape[3];
+    int weather_channels = weather_input_shape[1];
+    int weather_height = weather_input_shape[2];
+    int weather_width = weather_input_shape[3];
+    int site_feature_dim = site_input_shape[1];
 
-    // Allocate network resources using num_classes as the filter output channels.
-    allocateNetworkResources(cudnn, netRes, batchSize, channels, height, width, num_classes);
+    // Create cuDNN handle.
+    CUDNN_CHECK(cudnnCreate(&cudnn));
+    // Create cuBLAS handle.
+    CUBLAS_CHECK(cublasCreate(&cublasHandle));
 
-    // --- Initialize the convolution filter weights ---
-    // Now, filter_out_channels is num_classes.
-    int filter_out_channels = num_classes;  
-    int filter_height = 3;
-    int filter_width  = 3;
-    int filterSize = filter_out_channels * channels * filter_height * filter_width;
+    // Allocate device memory for inputs.
+    int weather_input_size = batchSize * weather_channels * weather_height * weather_width;
+    CUDA_CHECK(cudaMalloc((void **)&d_weather_input, weather_input_size * sizeof(float)));
 
-    // Create host-side vector for filter weights.
-    std::vector<float> host_filter(filterSize);
-    float initRange = 0.01f;
-    std::default_random_engine generator;
-    std::uniform_real_distribution<float> distribution(-initRange, initRange);
-    for (int i = 0; i < filterSize; i++) {
-        host_filter[i] = distribution(generator);
-    }
+    int site_input_size = batchSize * site_feature_dim;
+    CUDA_CHECK(cudaMalloc((void **)&d_site_input, site_input_size * sizeof(float)));
 
-    // Copy the initialized filter weights from host to device.
-    cudaError_t err = cudaMemcpy(netRes.d_filter,
-                                 host_filter.data(),
-                                 filterSize * sizeof(float),
-                                 cudaMemcpyHostToDevice);
-    if (err != cudaSuccess) {
-        std::cerr << "Error copying filter weights: " << cudaGetErrorString(err) << std::endl;
-        exit(EXIT_FAILURE);
-    }
-
-    // --- Allocate memory for filter gradients ---
-    int filterSizeGrad = num_classes * channels * height * width;
-    err = cudaMalloc((void **)&d_filter_grad, filterSizeGrad * sizeof(float));
-    if (err != cudaSuccess) {
-        std::cerr << "Error allocating filter gradient memory: " << cudaGetErrorString(err) << std::endl;
-        exit(EXIT_FAILURE);
-    }
-}
-
-#include "../include/cnn_model.h"
-#include "../include/conv_layer.h"
-#include "../include/activation_layer.h"
-#include "../include/global_average_pooling_layer.h"
-#include "../include/softmax_layer.h"
-#include "../include/error_checking.h"
-#include "../include/memory_man.h"
-#include "../include/cudnn_utils.h"
-#include <cuda_runtime.h>
-#include <iostream>
-
-// Helper: Print a tensor descriptor's dimensions (for debugging)
-void printTensorDesc(const cudnnTensorDescriptor_t desc, const char* tag) {
-    cudnnDataType_t dataType;
-    int n, c, h, w;
-    int nStride, cStride, hStride, wStride;
-    CUDNN_CHECK(cudnnGetTensor4dDescriptor(desc, &dataType, &n, &c, &h, &w,
-                                             &nStride, &cStride, &hStride, &wStride));
-    std::cout << tag << " dims: N=" << n << " C=" << c 
-              << " H=" << h << " W=" << w 
-              << " [strides: " << nStride << ", " 
-              << cStride << ", " << hStride << ", " << wStride << "]" 
-              << std::endl;
-}
-
-void CNNModel::forward() {
-    // ----- Convolution forward pass -----
-    convForward(cudnn, netRes.inputDesc, netRes.d_input,
-                netRes.filterDesc, netRes.d_filter,
-                netRes.convDesc, netRes.convOutDesc, netRes.d_conv_output,
-                &netRes.workspaceSize, &netRes.d_workspace);
-
-    // ----- Activation forward pass -----
-    activationForward(cudnn, netRes.actDesc, netRes.convOutDesc, netRes.d_conv_output,
-                      netRes.convOutDesc, netRes.d_activation_output);
-
-    // ----- Global Average Pooling -----
-    int batchSize = weather_input_shape[0];  // e.g., 128
-    // Create a GAP descriptor for shape [batchSize, num_classes, 1, 1] in NCHW
-    cudnnTensorDescriptor_t gapOutputDesc;
-    CUDNN_CHECK(cudnnCreateTensorDescriptor(&gapOutputDesc));
-    CUDNN_CHECK(cudnnSetTensor4dDescriptor(gapOutputDesc,
+    // Create tensor descriptor for weather input (needed for conv layer).
+    CUDNN_CHECK(cudnnCreateTensorDescriptor(&weather_input_desc));
+    CUDNN_CHECK(cudnnSetTensor4dDescriptor(weather_input_desc,
                                            CUDNN_TENSOR_NCHW,
                                            CUDNN_DATA_FLOAT,
                                            batchSize,
-                                           num_classes,
-                                           1,
-                                           1));
-    printTensorDesc(gapOutputDesc, "GAP descriptor (for pooling)");
+                                           weather_channels,
+                                           weather_height,
+                                           weather_width));
 
-    // Allocate temporary device memory for the GAP output.
-    float* d_gap_output = nullptr;
-    int softmaxBufferSize = batchSize * num_classes * sizeof(float);
-    CUDA_CHECK(cudaMalloc(&d_gap_output, softmaxBufferSize));
+    // --- Build Layers ---
+    // Weather Branch:
+    // Create a convolution layer with 16 filters and kernel size (3,1).
+    weatherConv = new ConvLayer(cudnn, weather_channels, 16, 3, 1, 0, 0, 1, 1);
+ 
+    // For valid convolution, output height = weather_height - 3 + 1, and width remains the same.
+    int conv_out_height = weather_height - 3 + 1;
+    int conv_out_width = weather_width; 
+    // Flattened output dimension = 16 * conv_out_height * conv_out_width.
+    int conv_flat_dim = 16 * conv_out_height * conv_out_width;
+    // Dense layer to map the flattened conv output to 64 neurons.
+    weatherDense = new DenseLayer(conv_flat_dim, 64, cublasHandle);
 
-    // Execute global average pooling.
-    globalAveragePoolingForward(cudnn, netRes.convOutDesc, netRes.d_activation_output,
-                                gapOutputDesc, d_gap_output);
-    CUDA_CHECK(cudaDeviceSynchronize());
-    CUDA_CHECK(cudaMemset(d_gap_output, 0, softmaxBufferSize));
-    // -----------------------
+    // Site Branch:
+    // Dense layer mapping site input features to 64 neurons.
+    siteDense = new DenseLayer(site_feature_dim, 64, cublasHandle);
 
-    // ----- Softmax Forward -----
-    // Create a separate output descriptor for softmax.
-    cudnnTensorDescriptor_t softmaxOutDesc;
-    CUDNN_CHECK(cudnnCreateTensorDescriptor(&softmaxOutDesc));
-    CUDNN_CHECK(cudnnSetTensor4dDescriptor(softmaxOutDesc,
-                                           CUDNN_TENSOR_NCHW,
-                                           CUDNN_DATA_FLOAT,
-                                           batchSize,
-                                           num_classes,
-                                           1,
-                                           1));
-    printTensorDesc(gapOutputDesc, "GAP descriptor (before softmax)");
-    printTensorDesc(softmaxOutDesc, "Softmax output descriptor");
-
-    // Allocate temporary memory for softmax outputs.
-    float* d_softmax_out_temp = nullptr;
-    CUDA_CHECK(cudaMalloc(&d_softmax_out_temp, softmaxBufferSize));
-
-    // Call softmax. Here we try using INSTANCE mode.
-    float alpha = 1.0f;
-    float beta  = 0.0f;
-    CUDNN_CHECK(cudnnSoftmaxForward(
-        cudnn,
-        CUDNN_SOFTMAX_ACCURATE,
-        CUDNN_SOFTMAX_MODE_INSTANCE, 
-        &alpha,
-        gapOutputDesc, d_gap_output,
-        &beta,
-        softmaxOutDesc, d_softmax_out_temp));
-
-    // Replace the old softmax output buffer; free it if it's already allocated.
-    if (netRes.d_softmax_output != nullptr) {
-        CUDA_CHECK(cudaFree(netRes.d_softmax_output));
-    }
-    netRes.d_softmax_output = d_softmax_out_temp;
-
-    // Clean up temporary resources.
-    cudnnDestroyTensorDescriptor(gapOutputDesc);
-    cudnnDestroyTensorDescriptor(softmaxOutDesc);
-    cudaFree(d_gap_output);
+    // Combined Branch:
+    // After concatenation of the 64-d weather and 64-d site features, features = 128.
+    dense1 = new DenseLayer(128, 128, cublasHandle);   // 128 -> 128, with ReLU activation later.
+    dense2 = new DenseLayer(128, 64, cublasHandle);     // 128 -> 64
+    dense3 = new DenseLayer(64, 32, cublasHandle);      // 64 -> 32
+    dense4 = new DenseLayer(32, 16, cublasHandle);      // 32 -> 16
+    // Final output layer: 16 -> num_classes with softmax activation.
+    outputLayer = new DenseLayer(16, num_classes, cublasHandle);
 }
 
-
-// Backward pass (placeholder implementation):
-void CNNModel::backward()
+// Cleanup method: free device memory and destroy layers/handles.
+void CNNModel::cleanup()
 {
-    // At this point, we assume that the current mini-batch target labels
-    // have been copied into the device buffer pointed to by d_target.
-    int batchSize = weather_input_shape[0]; // Current mini-batch size.
-    int outElements = batchSize * 10;       // For output shape 
+    if (d_weather_input)
+        cudaFree(d_weather_input);
+    if (d_site_input)
+        cudaFree(d_site_input);
+    CUDNN_CHECK(cudnnDestroyTensorDescriptor(weather_input_desc));
 
-    // Allocate temporary device memory for storing the loss gradient.
-    float *d_loss_grad = nullptr;
-    cudaMalloc((void **)&d_loss_grad, outElements * sizeof(float));
+    if (weatherConv)
+    {
+        delete weatherConv;
+        weatherConv = nullptr;
+    }
+    if (weatherDense)
+    {
+        delete weatherDense;
+        weatherDense = nullptr;
+    }
+    if (siteDense)
+    {
+        delete siteDense;
+        siteDense = nullptr;
+    }
+    if (dense1)
+    {
+        delete dense1;
+        dense1 = nullptr;
+    }
+    if (dense2)
+    {
+        delete dense2;
+        dense2 = nullptr;
+    }
+    if (dense3)
+    {
+        delete dense3;
+        dense3 = nullptr;
+    }
+    if (dense4)
+    {
+        delete dense4;
+        dense4 = nullptr;
+    }
+    if (outputLayer)
+    {
+        delete outputLayer;
+        outputLayer = nullptr;
+    }
 
-    int blockSize = 256;
-    int numBlocks = (outElements + blockSize - 1) / blockSize;
+    CUDNN_CHECK(cudnnDestroy(cudnn));
+    CUBLAS_CHECK(cublasDestroy(cublasHandle));
+}
 
-    // Actual kernel invocation
-    compute_loss_grad_kernel<<<numBlocks, blockSize>>>(netRes.d_softmax_output, d_target, d_loss_grad, outElements);
+// Forward pass: mirror the Keras model
+void CNNModel::forward()
+{
+    int batchSize = weather_input_shape[0];
 
-    //compute_loss_grad_kernel<<<numBlocks, blockSize>>>(netRes.d_softmax_output, d_target, d_loss_grad, outElements);
-    cudaDeviceSynchronize();  // Ensure the kernel completes execution before proceeding
+    // --- Weather Branch ---
+    // Perform convolution on weather input.
+    weatherConv->forward(weather_input_desc, d_weather_input);
+    // weatherConv->getOutput() is the convolution output.
+    weatherDense->forward(weatherConv->getOutput(), batchSize);
+    float *weather_features = weatherDense->getOutput(); // shape: [batchSize x 64]
+
+    // --- Site Branch ---
+    siteDense->forward(d_site_input, batchSize);
+    float *site_features = siteDense->getOutput(); // shape: [batchSize x 64]
+
+    // --- Concatenation ---
+    // Combined features = concatenate(weather_features, site_features) -> [batchSize x 128]
+    int combined_dim = 128; // 64 + 64
+    float *d_concat = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_concat, batchSize * combined_dim * sizeof(float)));
+    int concatBlockSize = 256;
+    int concatGridSize = (batchSize + concatBlockSize - 1) / concatBlockSize;
+    // Call a kernel that concatenates along the feature dimension.
+    // It copies 64 features from weather_features and then 64 from site_features for each sample.
+    concatenateKernel<<<concatGridSize, concatBlockSize>>>(weather_features, site_features, d_concat, 64, 64, batchSize);
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    // Save the concatenated buffer for backward propagation.
+    d_concat_dense1 = d_concat;
+
+    // --- Combined Branch FC Layers ---
+    dense1->forward(d_concat, batchSize);                // output: [batchSize x 128]
+    dense2->forward(dense1->getOutput(), batchSize);       // output: [batchSize x 64]
+    dense3->forward(dense2->getOutput(), batchSize);       // output: [batchSize x 32]
+    dense4->forward(dense3->getOutput(), batchSize);       // output: [batchSize x 16]
+    outputLayer->forward(dense4->getOutput(), batchSize);  // output: [batchSize x num_classes]
+
+    // --- Softmax Activation ---
+    float alpha = 1.0f, beta = 0.0f;
+    cudnnTensorDescriptor_t outDesc;
+    CUDNN_CHECK(cudnnCreateTensorDescriptor(&outDesc));
+    CUDNN_CHECK(cudnnSetTensor4dDescriptor(outDesc,
+                                           CUDNN_TENSOR_NCHW,
+                                           CUDNN_DATA_FLOAT,
+                                           batchSize, num_classes, 1, 1));
+    CUDNN_CHECK(cudnnSoftmaxForward(cudnn,
+                                    CUDNN_SOFTMAX_ACCURATE, CUDNN_SOFTMAX_MODE_INSTANCE,
+                                    &alpha,
+                                    outDesc,
+                                    outputLayer->getOutput(),
+                                    &beta,
+                                    outDesc,
+                                    outputLayer->getOutput()));
+    CUDNN_CHECK(cudnnDestroyTensorDescriptor(outDesc));
+}
+
+// Full backward pass: using the loss gradient from the network output.
+void CNNModel::backward(float *d_loss_grad)
+{
+
+    int batchSize = weather_input_shape[0];
+
+    // --- Backpropagation in Combined Branch ---
+    // 1. Output Layer backward.
+    float *d_out_grad = outputLayer->backward(d_loss_grad, dense4->getOutput(), batchSize);
+    // d_out_grad is allocated in outputLayer->backward.
     
+    // 2. Dense Layer 4 backward.
+    float *d_dense4_grad = dense4->backward(d_out_grad, dense3->getOutput(), batchSize);
+    cudaFree(d_out_grad);  // Free temporary gradient from output layer.
 
-    // Backpropagate through the activation layer using d_loss_grad.
-    activationBackward(cudnn,
-                       netRes.actDesc,
-                       netRes.convOutDesc, netRes.d_activation_output,
-                       netRes.convOutDesc, d_loss_grad,
-                       netRes.convOutDesc, netRes.d_conv_output,
-                       netRes.convOutDesc, d_loss_grad);
+    // 3. Dense Layer 3 backward.
+    float *d_dense3_grad = dense3->backward(d_dense4_grad, dense2->getOutput(), batchSize);
+    cudaFree(d_dense4_grad);
 
-    // Backpropagate through the convolution layer to compute filter gradients.
-    convBackwardFilter(cudnn,
-                       netRes.inputDesc, netRes.d_input,
-                       netRes.convOutDesc, d_loss_grad,
-                       netRes.convDesc,
-                       netRes.filterDesc, d_filter_grad,
-                       netRes.d_workspace, netRes.workspaceSize,
-                       1.0f, 0.0f);
+    // 4. Dense Layer 2 backward.
+    float *d_dense2_grad = dense2->backward(d_dense3_grad, dense1->getOutput(), batchSize);
+    cudaFree(d_dense3_grad);
 
-    cudaFree(d_loss_grad);
-}
+    // 5. Dense Layer 1 backward.
+    // Make sure we pass the stored input to dense1.
+    // If Option 1 is used, dense1 was given the concatenated feature buffer (d_concat)
+    // in forward and stored it via d_input_store.
+    float *original_concat_input = dense1->getInput();
+    float *d_concat_grad = dense1->backward(d_dense2_grad, original_concat_input, batchSize);
+    cudaFree(d_dense2_grad);
+    
+    // --- Now free the concatenated input buffer that was passed to dense1 (Option 1) ---
+    // Since CNNModel allocated d_concat in forward and passed it to dense1->forward,
+    // it is our responsibility to free it once backward is finished.
+    cudaFree(original_concat_input);
+    // Optionally, you may want to set the stored pointer to nullptr:
+    // (e.g., if DenseLayer has a setter or if you directly manage it in CNNModel.)
+    
+    // --- Split Concatenated Gradient ---
+    // d_concat_grad is of shape [batchSize x 128]. Split it into:
+    //  - d_weather_dense_grad: first 64 columns (for weather branch)
+    //  - d_site_dense_grad: last 64 columns (for site branch)
+    float *d_weather_dense_grad = nullptr, *d_site_dense_grad = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_weather_dense_grad, batchSize * 64 * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_site_dense_grad, batchSize * 64 * sizeof(float)));
+    int splitGrid = (batchSize + 255) / 256;
+    splitConcatGradientKernel<<<splitGrid, 256>>>(d_concat_grad, d_weather_dense_grad, d_site_dense_grad, batchSize, 64);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    cudaFree(d_concat_grad);  // Free the combined gradient buffer.
 
-float CNNModel::evaluate(float *X_weather_test, float *X_site_test, 
-    float *y_test, int num_test_samples) {
-int imageSize = weather_input_shape[1] * weather_input_shape[2] * weather_input_shape[3];
-int batchSize = weather_input_shape[0]; // allocated size from training
+    // --- Backprop Site Branch ---
+    // Backward pass for site dense layer.
+    float *d_site_input_grad = siteDense->backward(d_site_dense_grad, d_site_input, batchSize);
+    cudaFree(d_site_input_grad);
+    cudaFree(d_site_dense_grad);
 
-int numCorrect = 0;
-int totalProcessed = 0;
+    // --- Backprop Weather Branch Dense ---
+    // Backward pass for weather dense layer.
+    float *d_conv_flat_grad = weatherDense->backward(d_weather_dense_grad, weatherConv->getOutput(), batchSize);
+    cudaFree(d_weather_dense_grad);
 
-// Process the test set in mini-batches.
-while (totalProcessed < num_test_samples) {
-// Compute the current batch size (may be less than training batch size on the last batch)
-int currentBatch = std::min(batchSize, num_test_samples - totalProcessed);
-
-// Copy current batch to device (assuming netRes.d_input is allocated for 'batchSize' samples)
-CUDA_CHECK(cudaMemcpy(netRes.d_input, 
-         X_weather_test + totalProcessed * imageSize, 
-         currentBatch * imageSize * sizeof(float),
-         cudaMemcpyHostToDevice));
-
-// If you use X_site_test as well, copy accordingly.
-// Run forward() only on the current batch.
-// (You might want to modify your forward() to accept a batch size parameter;
-// if not, you can assume your network always processes full 'batchSize' samples
-// and deal with the remainder appropriately.)
-forward();
-
-// Allocate host buffer for the current batch’s softmax outputs.
-float* h_softmax_output = new float[currentBatch * num_classes];
-CUDA_CHECK(cudaMemcpy(h_softmax_output, netRes.d_softmax_output,
-         currentBatch * num_classes * sizeof(float),
-         cudaMemcpyDeviceToHost));
-
-// For each sample in the current batch, determine predicted label.
-for (int i = 0; i < currentBatch; i++) {
-int predictedLabel = -1;
-float maxProb = -1.0f;
-for (int j = 0; j < num_classes; j++) {
-float prob = h_softmax_output[i * num_classes + j];
-if (prob > maxProb) {
-maxProb = prob;
-predictedLabel = j;
-}
-}
-// Extract true label from y_test (assumes one-hot encoding).
-int trueLabel = -1;
-for (int j = 0; j < num_classes; j++) {
-if (y_test[(totalProcessed + i) * num_classes + j] == 1.0f) {
-trueLabel = j;
-break;
-}
-}
-if (predictedLabel == trueLabel)
-numCorrect++;
-}
-delete[] h_softmax_output;
-totalProcessed += currentBatch;
-}
-float accuracy = static_cast<float>(numCorrect) / num_test_samples;
-std::cout << "Debug: Number of correct predictions = " << numCorrect
-<< " out of " << num_test_samples << std::endl;
-return accuracy;
+    // --- Backprop Weather Convolution ---
+    // Use the convolution layer backward pass to update the conv filter weights.
+    weatherConv->backward(weather_input_desc, d_weather_input, d_conv_flat_grad);
+    cudaFree(d_conv_flat_grad);
 }
 
 
+// Train function: iterates over mini-batches, performing forward/backward passes.
+void CNNModel::train(float *X_weather, float *X_site, float *y,
+                     int num_samples, int batch_size, int epochs,
+                     float *X_weather_val, float *X_site_val, float *y_val,
+                     int num_val_samples)
+{
+    int num_batches = num_samples / batch_size;
+    for (int epoch = 0; epoch < epochs; epoch++)
+    {
+        std::cout << "Epoch " << (epoch + 1) << "/" << epochs << std::endl;
+        for (int batch = 0; batch < num_batches; batch++)
+        {
+            int weather_flat_size = weather_input_shape[1] * weather_input_shape[2] * weather_input_shape[3];
+            // Get pointers to current mini-batch data.
+            float *curr_weather = X_weather + batch * batch_size * weather_flat_size;
+            float *curr_site = X_site + batch * batch_size * site_input_shape[1];
+            float *curr_labels = y + batch * batch_size * num_classes;
 
+            // Copy mini-batch data to device.
+            CUDA_CHECK(cudaMemcpy(d_weather_input,
+                                  curr_weather,
+                                  batch_size * weather_flat_size * sizeof(float),
+                                  cudaMemcpyHostToDevice));
+            CUDA_CHECK(cudaMemcpy(d_site_input,
+                                  curr_site,
+                                  batch_size * site_input_shape[1] * sizeof(float),
+                                  cudaMemcpyHostToDevice));
 
+            // Allocate and copy labels to device.
+            float *d_target;
+            CUDA_CHECK(cudaMalloc(&d_target, batch_size * num_classes * sizeof(float)));
+            CUDA_CHECK(cudaMemcpy(d_target,
+                                  curr_labels,
+                                  batch_size * num_classes * sizeof(float),
+                                  cudaMemcpyHostToDevice));
 
-void CNNModel::updateWeights() {
-    // For example, let’s say the total number of weight parameters is stored in filterSize.
-    // You should compute or store this value during resource allocation.
-    int filter_out_channels = 1; // as assumed in your build() function
-    int filter_height = 3;
-    int filter_width = 3;
-    int channels = weather_input_shape[1];
-    int filterSize = filter_out_channels * channels * filter_height * filter_width; 
+            // Forward pass.
+            forward();
 
-    float learning_rate = 0.001f; // Or whatever you decide is appropriate
+            // Compute loss gradient using a loss kernel.
+            int out_elements = batch_size * num_classes;
+            float *d_loss_grad;
+            CUDA_CHECK(cudaMalloc(&d_loss_grad, out_elements * sizeof(float)));
+            int blockSize = 256;
+            int gridSize = (out_elements + blockSize - 1) / blockSize;
+            compute_loss_grad_kernel<<<gridSize, blockSize>>>(outputLayer->getOutput(), d_target, d_loss_grad, out_elements);
+            CUDA_CHECK(cudaDeviceSynchronize());
 
-    int blockSize = 256;
-    int numBlocks = (filterSize + blockSize - 1) / blockSize;
+            // Backward pass.
+            backward(d_loss_grad);
 
-    // Launch the kernel to update the weights.
-    sgd_update_kernel<<<numBlocks, blockSize>>>(netRes.d_filter, d_filter_grad, learning_rate, filterSize);
-    cudaDeviceSynchronize();
+            cudaFree(d_loss_grad);
+            cudaFree(d_target);
+
+            std::cout << "\rBatch " << (batch + 1) << "/" << num_batches << std::flush;
+        }
+
+        // End of epoch: evaluate on validation data.
+        float val_acc = evaluate(X_weather_val, X_site_val, y_val, num_val_samples);
+        std::cout << "\nValidation Accuracy: " << val_acc << std::endl;
+    }
+    std::cout << "Training complete." << std::endl;
+}
+
+// Evaluate: runs forward pass on test data and computes accuracy.
+float CNNModel::evaluate(float *X_weather, float *X_site, float *y, int num_test_samples)
+{
+    int batchSize = weather_input_shape[0];
+    int num_batches = num_test_samples / batchSize;
+    int correct = 0;
+    for (int batch = 0; batch < num_batches; batch++)
+    {
+        int weather_flat_size = weather_input_shape[1] * weather_input_shape[2] * weather_input_shape[3];
+        float *curr_weather = X_weather + batch * batchSize * weather_flat_size;
+        float *curr_site = X_site + batch * batchSize * site_input_shape[1];
+        CUDA_CHECK(cudaMemcpy(d_weather_input,
+                              curr_weather,
+                              batchSize * weather_flat_size * sizeof(float),
+                              cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(d_site_input,
+                              curr_site,
+                              batchSize * site_input_shape[1] * sizeof(float),
+                              cudaMemcpyHostToDevice));
+        forward();
+
+        std::vector<float> host_output(batchSize * num_classes);
+        CUDA_CHECK(cudaMemcpy(host_output.data(),
+                              outputLayer->getOutput(),
+                              batchSize * num_classes * sizeof(float),
+                              cudaMemcpyDeviceToHost));
+        // For each sample, pick the argmax as prediction.
+        for (int i = 0; i < batchSize; i++)
+        {
+            int pred = 0;
+            float max_val = host_output[i * num_classes];
+            for (int j = 1; j < num_classes; j++)
+            {
+                float val = host_output[i * num_classes + j];
+                if (val > max_val)
+                {
+                    max_val = val;
+                    pred = j;
+                }
+            }
+            int true_label = 0;
+            for (int j = 0; j < num_classes; j++)
+            {
+                if (y[(batch * batchSize + i) * num_classes + j] == 1.0f)
+                {
+                    true_label = j;
+                    break;
+                }
+            }
+            if (pred == true_label)
+            {
+                correct++;
+            }
+        }
+    }
+    return static_cast<float>(correct) / num_test_samples;
 }

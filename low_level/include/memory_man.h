@@ -3,37 +3,54 @@
 
 #include <cudnn.h>
 #include <cuda_runtime.h>
-#include "cudnn_utils.h"
 
-// Struct to hold allocated network resources.
+// This structure now holds all GPU resources for our updated CNN model,
+// including additional buffers for Adam's moment estimates for the output layer.
 struct NetworkResources {
-    cudnnTensorDescriptor_t inputDesc;
-    float* d_input;
-    cudnnFilterDescriptor_t filterDesc;
-    float* d_filter;
-    cudnnConvolutionDescriptor_t convDesc;
-    cudnnTensorDescriptor_t convOutDesc;
-    float* d_conv_output;
-    void* d_workspace;
-    size_t workspaceSize;
+    // Weather Branch:
+    cudnnTensorDescriptor_t weather_input_desc;
+    float* d_weather_input;
+    float* d_weather_dense_w;
+    float* d_weather_dense_b;
+    float* d_weather_dense_output;
 
-    cudnnActivationDescriptor_t actDesc;
-    float* d_activation_output;
+    //for the weather convolution:
+    float* d_weather_conv_filter;   // Filter weights for weather convolution.
+    float* d_weather_conv_output;   // Output of the convolution operation.
 
-    cudnnPoolingDescriptor_t poolDesc;
-    cudnnTensorDescriptor_t poolOutDesc;
-    float* d_pooling_output;
+    // Site Branch:
+    float* d_site_input;
+    float* d_site_dense_w;
+    float* d_site_dense_b;
+    float* d_site_dense_output;
 
-    float* d_softmax_output;
+    // Combined Branch Dense Layers:
+    float* d_dense1_w;
+    float* d_dense1_b;
+    float* d_dense1_output;
+    float* d_dense2_w;
+    float* d_dense2_b;
+    float* d_dense2_output;
+    float* d_dense3_w;
+    float* d_dense3_b;
+    float* d_dense3_output;
+    float* d_dense4_w;
+    float* d_dense4_b;
+    float* d_dense4_output;
+
+    // Output Layer:
+    float* d_output_w;
+    // Added members for Adam optimizer moment buffers:
+    float* d_output_w_m;  // First moment estimate.
+    float* d_output_w_v;  // Second moment estimate.
+    float* d_output_b;
+    float* d_output;
 };
 
-// Function to allocate resources dynamically based on input dimensions.
-// Added 'filter_out_channels' so that the allocated filter memory has the correct size.
 void allocateNetworkResources(cudnnHandle_t cudnn, NetworkResources &res,
-                              int batchSize, int channels, int height, int width,
-                              int filter_out_channels = 1);
+                              int batchSize, int weather_channels, int weather_height, int weather_width,
+                              int site_feature_dim, int num_classes);
 
-// Function to clean up allocated resources.
 void cleanupNetworkResources(cudnnHandle_t cudnn, NetworkResources &res);
 
 #endif // MEMORY_MAN_H

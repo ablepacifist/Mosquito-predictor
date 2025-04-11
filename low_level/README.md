@@ -45,10 +45,6 @@ low_level/
 └── README.md                # This file
 ```
 
-If desired, you can split documentation into separate files and add hyperlinks to each (e.g., linking to `include/preprocess.h` or `src/cnn_model.cpp`) for better organization.
-
----
-
 ## Build Instructions
 
 1. **Clone or Download the Repository**  
