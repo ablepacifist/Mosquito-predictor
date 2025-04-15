@@ -1,680 +1,424 @@
-#include "../include/preprocess.h"
-#include <iostream>
-#include <vector>
-#include <string>
-#include <unordered_map>
+#include "preprocess.h"
+#include <fstream>
 #include <sstream>
+#include <iostream>
+#include <string>
+#include <vector>
+#include <algorithm>
+#include <map>
+#include <ctime>
 #include <iomanip>
 #include <cmath>
-#include <stdexcept>
-#include <set>
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <vector>
+#include <string>
+#include <map>
+#include <ctime>
+#include <iomanip>
 #include <algorithm>
-#include <cmath>  // For std::floor and std::round
-// Include a CSV parser library – make sure rapidcsv.hpp is in your include path.
-#include "rapidcsv.hpp"
+#include <cmath>
+#include <cstdlib>
+#include <random>
 
-// --- Helper Functions ---
-float interpolate(float previousValue, float nextValue) {
-    return (previousValue + nextValue) / 2.0f; // Simple average of neighbors
-}
-// Returns the mean of valid (non-missing) float values in the vector.
-float calculateMean(const std::vector<float>& vec) {
-    float sum = 0.0f;
-    int count = 0;
-    for (const auto &v : vec) {
-        if (!std::isnan(v) && !std::isinf(v)) {
-            sum += v;
-            count++;
+// ----------------------------------------------------------------------------
+
+// Function to print the first 10 data points for both branches
+void printFirst10DataPoints(const std::vector<std::vector<double>> &X_weather,
+                            const std::vector<std::vector<double>> &X_site) {
+    std::cout << "First 10 data points for Weather Branch:" << std::endl;
+    for (int i = 0; i < std::min(10, static_cast<int>(X_weather.size())); i++) {
+        std::cout << "Data Point " << i + 1 << ": ";
+        for (const auto &value : X_weather[i]) {
+            std::cout << value << " ";
         }
+        std::cout << std::endl;
     }
-    return (count > 0) ? sum / count : 0.0f;
-}
 
-// For NN-friendly features (e.g., Temperature),
-// replace missing or invalid values (NaN or inf) with the column’s mean.
-void imputeColumnWithMean(std::vector<float>& vec) {
-    float mean = calculateMean(vec);
-    for (auto& v : vec) {
-        if (std::isnan(v) || std::isinf(v)) {
-            v = mean;
+    std::cout << "\nFirst 10 data points for Site Branch:" << std::endl;
+    for (int i = 0; i < std::min(10, static_cast<int>(X_site.size())); i++) {
+        std::cout << "Data Point " << i + 1 << ": ";
+        for (const auto &value : X_site[i]) {
+            std::cout << value << " ";
         }
+        std::cout << std::endl;
     }
 }
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <vector>
+#include <string>
+#include <ctime>
+#include <iomanip>
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <random>
 
-// For label–like columns (e.g., DipCount), perform linear interpolation.
-// This function fills consecutive missing values by interpolating between the nearest valid neighbors.
-// If the first or last values are missing, they are replaced with the first/last valid value.
-void interpolateColumn(std::vector<float>& vec) {
-    size_t n = vec.size();
-    if (n == 0) return;
-
-    // Find index of first valid value.
-    size_t firstValid = 0;
-    while (firstValid < n && (std::isnan(vec[firstValid]) || std::isinf(vec[firstValid])))
-        firstValid++;
-    if (firstValid == n) {
-        // All values are missing. Choose a default (could also flag an error).
-        for (size_t i = 0; i < n; i++) {
-            vec[i] = 0.0f;
-        }
-        return;
+// ----------------------------------------------------------------------------
+// Helper: split
+// Splits a string by the given delimiter.
+std::vector<std::string> split(const std::string &s, char delimiter) {
+    std::vector<std::string> tokens;
+    std::string token;
+    std::istringstream tokenStream(s);
+    while (std::getline(tokenStream, token, delimiter)) {
+        tokens.push_back(token);
     }
-    // Replace any missing values at the beginning with the first valid value.
-    for (size_t i = 0; i < firstValid; i++) {
-        vec[i] = vec[firstValid];
-    }
-    // Process the rest of the column.
-    size_t i = firstValid;
-    while (i < n) {
-        if (!std::isnan(vec[i]) && !std::isinf(vec[i])) {
-            i++;
-            continue;
-        }
-        // Find previous valid value (guaranteed to be valid since i > 0)
-        size_t start = i - 1;
-        // Find next valid index.
-        size_t j = i;
-        while (j < n && (std::isnan(vec[j]) || std::isinf(vec[j])))
-            j++;
-        if (j < n) {
-            float startVal = vec[start];
-            float endVal = vec[j];
-            size_t gap = j - start;
-            for (size_t k = i; k < j; k++) {
-                // Linear interpolation: proportionally fill between startVal and endVal.
-                vec[k] = startVal + (endVal - startVal) * (float)(k - start) / (float)gap;
-            }
-            i = j;
-        } else {
-            // No valid value after; fill all remaining with the last valid value.
-            for (size_t k = i; k < n; k++) {
-                vec[k] = vec[start];
-            }
-            break;
-        }
-    }
+    return tokens;
 }
 
-//parse a numeric column (if used in site features).
-std::vector<float> parseNumericColumn(rapidcsv::Document &doc, const std::string &columnName) {
-    std::vector<float> parsedColumn;
-    try {
-        std::vector<std::string> rawColumn = doc.GetColumn<std::string>(columnName);
-        for (const auto &value : rawColumn) {
-            try {
-                parsedColumn.push_back(std::stof(value));
-            } catch (...) {
-                parsedColumn.push_back(NAN); // Mark invalid/missing as NaN
-            }
-        }
-        // Impute missing values with the column's mean (for NN-friendly features)
-        imputeColumnWithMean(parsedColumn);
-    } catch (const std::exception &e) {
-        throw std::runtime_error("Error parsing numeric column '" + columnName + "': " + std::string(e.what()));
-    }
-    return parsedColumn;
+// ----------------------------------------------------------------------------
+// Helper: trim
+// Trims whitespace from the beginning and end of the string.
+std::string trim(const std::string &s) {
+    size_t start = s.find_first_not_of(" \t\r\n");
+    if (start == std::string::npos)
+        return "";
+    size_t end = s.find_last_not_of(" \t\r\n");
+    return s.substr(start, end - start + 1);
 }
-/**
- * @brief Parse a date in the format "mm/dd/yyyy" into a std::tm struct.
- * @param dateStr The date string to parse.
- * @return A std::tm struct representing the parsed date.
- */
-std::tm parseDate(const std::string &dateStr)
-{
+
+// ----------------------------------------------------------------------------
+// Helper: getCategoryIndex
+// Searches the vector 'categories' for the given category string 's'.
+// If found, returns its index. Otherwise, appends 's' and returns the new index.
+// This maintains the order of first appearance.
+int getCategoryIndex(std::vector<std::string> &categories, const std::string &s) {
+    for (size_t i = 0; i < categories.size(); i++) {
+        if (categories[i] == s)
+            return static_cast<int>(i);
+    }
+    categories.push_back(s);
+    return static_cast<int>(categories.size() - 1);
+}
+
+// ----------------------------------------------------------------------------
+// Helper: parseDateOrdinal
+// Expects a date string in "MM/DD/YYYY" format.
+// Returns an ordinal value matching Python's date.toordinal().
+// (mktime provides days since January 1, 1970; we add 719163 to match Python.)
+int parseDateOrdinal(const std::string &dateStr, int &month, int &day, int &year) {
     std::tm tm = {};
     std::istringstream ss(dateStr);
-    // std::get_time is available in C++11 and later though support may vary on Windows.
     ss >> std::get_time(&tm, "%m/%d/%Y");
-    if (ss.fail())
-    {
-        throw std::runtime_error("Failed to parse date: " + dateStr);
+    if (ss.fail()) {
+        month = day = year = 0;
+        return 0;
     }
-    return tm;
+    month = tm.tm_mon + 1; // tm_mon is 0-indexed.
+    day = tm.tm_mday;
+    year = tm.tm_year + 1900;
+    time_t time_temp = mktime(&tm);
+    int daySince1970 = static_cast<int>(time_temp / 86400);
+    int dayOrdinal = daySince1970 + 719163; // Adjust to Python's epoch.
+    return dayOrdinal;
 }
 
-/**
- * @brief Convert a std::tm structure to an ordinal day (e.g., days since Unix epoch).
- * @param tm The std::tm structure to convert.
- * @return The ordinal day as an integer.
- */
-int dateToOrdinal(const std::tm &tm)
-{
-    std::time_t timeEpoch = std::mktime(const_cast<std::tm *>(&tm));
-    return static_cast<int>(timeEpoch / (24 * 3600));
-}
-
-/**
- * @brief Standard scaling: subtract the mean and divide by standard deviation, column-wise.
- * @param data The 2D vector of data to scale.
- */
-void standardScale(std::vector<std::vector<double>> &data)
-{
+// ----------------------------------------------------------------------------
+// Helper: computeMeanStd
+// Computes the mean and standard deviation for each column in the data matrix.
+void computeMeanStd(const std::vector<std::vector<double>> &data,
+                    std::vector<double> &mean,
+                    std::vector<double> &stdDev) {
     if (data.empty())
         return;
-    int rows = data.size();
-    int cols = data[0].size();
-    std::vector<double> means(cols, 0.0);
-    std::vector<double> stds(cols, 0.0);
-
-    // Compute means
-    for (int j = 0; j < cols; j++)
-    {
-        double sum = 0;
-        for (int i = 0; i < rows; i++)
-        {
-            sum += data[i][j];
+    int n = data.size();
+    int m = data[0].size();
+    mean.assign(m, 0.0);
+    stdDev.assign(m, 0.0);
+    for (const auto &row : data)
+        for (int j = 0; j < m; j++)
+            mean[j] += row[j];
+    for (int j = 0; j < m; j++)
+        mean[j] /= n;
+    for (const auto &row : data)
+        for (int j = 0; j < m; j++) {
+            double diff = row[j] - mean[j];
+            stdDev[j] += diff * diff;
         }
-        means[j] = sum / rows;
-    }
-
-    // Compute standard deviations
-    for (int j = 0; j < cols; j++)
-    {
-        double sumSq = 0;
-        for (int i = 0; i < rows; i++)
-        {
-            double diff = data[i][j] - means[j];
-            sumSq += diff * diff;
-        }
-        stds[j] = std::sqrt(sumSq / rows);
-        if (stds[j] == 0)
-            stds[j] = 1; // avoid dividing by zero
-    }
-
-    // Scale data
-    for (int i = 0; i < rows; i++)
-    {
-        for (int j = 0; j < cols; j++)
-        {
-            data[i][j] = (data[i][j] - means[j]) / stds[j];
-        }
+    for (int j = 0; j < m; j++) {
+        stdDev[j] = std::sqrt(stdDev[j] / n);
+        if (stdDev[j] == 0.0)
+            stdDev[j] = 1.0; // Avoid division by zero.
     }
 }
 
-/**
- * @brief One-hot encode a categorical column.
- * @param column The vector of categorical values to encode.
- * @return A 2D vector representing the one-hot encoded data.
- */
-std::vector<std::vector<int>> oneHotEncode(const std::vector<std::string> &column)
-{
-    std::unordered_map<std::string, int> categoryMap;
-    int code = 0;
-    for (const auto &value : column)
-    {
-        if (categoryMap.find(value) == categoryMap.end())
-        {
-            categoryMap[value] = code++;
-        }
-    }
-
-    std::vector<std::vector<int>> oneHot(column.size(), std::vector<int>(categoryMap.size(), 0));
-    for (size_t i = 0; i < column.size(); i++)
-    {
-        oneHot[i][categoryMap[column[i]]] = 1;
-    }
-    return oneHot;
+// ----------------------------------------------------------------------------
+// Helper: standardizeData
+// Standardizes the data (zero mean, unit variance) using the provided means and standard deviations.
+void standardizeData(std::vector<std::vector<double>> &data,
+                     const std::vector<double> &mean,
+                     const std::vector<double> &stdDev) {
+    int n = data.size();
+    int m = data[0].size();
+    for (int i = 0; i < n; i++)
+        for (int j = 0; j < m; j++)
+            data[i][j] = (data[i][j] - mean[j]) / stdDev[j];
 }
 
-/**
- * @brief Fill missing values in a numeric column with a default value.
- * @param column The vector of numeric values.
- * @param defaultValue The default value to use for missing values.
- * @return A vector with missing values replaced.
- */
-std::vector<double> fillMissingValues(const std::vector<double> &column, double defaultValue)
-{
-    std::vector<double> filledColumn = column;
-    for (auto &value : filledColumn)
-    {
-        if (std::isnan(value))
-        {
-            value = defaultValue;
-        }
-    }
-    return filledColumn;
+// ----------------------------------------------------------------------------
+// Helper: shuffleVector
+// Shuffles a vector using a fixed seed (default: 42) to mimic Python's random_state.
+template <typename T>
+void shuffleVector(std::vector<T> &vec, unsigned int seed = 42) {
+    std::default_random_engine engine(seed);
+    std::shuffle(vec.begin(), vec.end(), engine);
 }
 
-/**
- * @brief Replace missing values in a categorical column with "missing".
- * @param column The vector of categorical values.
- * @return A vector with missing values replaced.
- */
-std::vector<std::string> fillMissingCategorical(const std::vector<std::string> &column)
-{
-    std::vector<std::string> filledColumn = column;
-    for (auto &value : filledColumn)
-    {
-        if (value.empty())
-        {
-            value = "missing";
-        }
-    }
-    return filledColumn;
-}
-
-// --- Preprocess Class Implementation ---
-
-/**
- * @brief Preprocess the data from a CSV file.
- * @param filePath The path to the CSV file.
- * @param X_weather_train Output: Weather training data.
- * @param X_site_train Output: Site training data.
- * @param y_train Output: Training labels.
- * @param X_weather_val Output: Weather validation data.
- * @param X_site_val Output: Site validation data.
- * @param y_val Output: Validation labels.
- * @param X_weather_test Output: Weather test data.
- * @param X_site_test Output: Site test data.
- * @param y_test Output: Test labels.
- */
-void preprocessData(const std::string &filePath,
-                    std::vector<std::vector<double>> &X_weather_train, std::vector<std::vector<double>> &X_site_train, std::vector<int> &y_train,
-                    std::vector<std::vector<double>> &X_weather_val, std::vector<std::vector<double>> &X_site_val, std::vector<int> &y_val,
-                    std::vector<std::vector<double>> &X_weather_test, std::vector<std::vector<double>> &X_site_test, std::vector<int> &y_test)
-{
-    try
-    {
-        // Load the CSV file
-        rapidcsv::Document doc(filePath);
-
-        // Parse labels
-        auto y = parseLabels(doc);
-
-        // Parse weather features
-        auto X_weather = parseWeatherFeatures(doc);
-
-        // Parse site features
-        auto X_site = parseSiteFeatures(doc);
-
-        // Normalize numeric data
-        standardScale(X_weather);
-        standardScale(X_site);
-
-        // Split data into training, validation, and test sets
-        splitData(X_weather, X_site, y, X_weather_train, X_site_train, y_train, X_weather_val, X_site_val, y_val, X_weather_test, X_site_test, y_test);
-    }
-    catch (const std::exception &e)
-    {
-        std::cerr << "Error in preprocessData: " << e.what() << std::endl;
-        throw; // Re-throw the exception for debugging purposes
-    }
-}
-
-/**
- * @brief Parse labels from the "DipCount" column in the CSV file.
- * @param doc The rapidcsv::Document object representing the CSV file.
- * @return A vector of labels (0 or 1).
- */
-std::vector<int> parseLabels(rapidcsv::Document &doc) {
-    std::vector<float> dipCount;
-    try {
-        std::vector<std::string> dipCountRaw = doc.GetColumn<std::string>("DipCount");
-        for (const auto &value : dipCountRaw) {
-            try {
-                dipCount.push_back(std::stof(value));
-            } catch (...) {
-                dipCount.push_back(NAN);
-            }
-        }
-    } catch (const std::exception &e) {
-        throw std::runtime_error("Error parsing 'DipCount' column: " + std::string(e.what()));
-    }
-
-    // Interpolate missing values in DipCount to preserve numerical continuity.
-    interpolateColumn(dipCount);
-
-    // For label creation, e.g., thresholding at 0.1
-    std::vector<int> y;
-    for (const auto &value : dipCount) {
-        y.push_back(value > 0.1 ? 1 : 0);
-    }
-    return y;
-}
-
-/**
- * @brief Parse weather-related features from the CSV file.
- * @param doc The rapidcsv::Document object representing the CSV file.
- * @return A 2D vector of weather features.
- */
-std::vector<std::vector<double>> parseWeatherFeatures(rapidcsv::Document &doc)
-{
-    std::vector<float> temperature, precipitation, cloudCoverage, dateOrdinal;
-    try
-    {
-        // Get the numeric columns as strings so we can convert them manually.
-        std::vector<std::string> tempStr = doc.GetColumn<std::string>("Temperature");
-        std::vector<std::string> precipStr = doc.GetColumn<std::string>("Precipitation");
-        std::vector<std::string> cloudStr = doc.GetColumn<std::string>("CloudCoverage");
-
-        // Resize our float vectors to match the number of rows.
-        temperature.resize(tempStr.size());
-        precipitation.resize(precipStr.size());
-        cloudCoverage.resize(cloudStr.size());
-
-        // Convert temperature strings to floats manually.
-        for (size_t i = 0; i < tempStr.size(); i++)
-        {
-            try {
-                temperature[i] = std::stof(tempStr[i]);
-            } catch (...) {
-                temperature[i] = NAN;
-            }
-        }
-        // Convert precipitation strings to floats manually.
-        for (size_t i = 0; i < precipStr.size(); i++)
-        {
-            try {
-                precipitation[i] = std::stof(precipStr[i]);
-            } catch (...) {
-                precipitation[i] = NAN;
-            }
-        }
-        // Convert cloud coverage strings to floats manually.
-        for (size_t i = 0; i < cloudStr.size(); i++)
-        {
-            try {
-                cloudCoverage[i] = std::stof(cloudStr[i]);
-            } catch (...) {
-                cloudCoverage[i] = NAN;
-            }
-        }
-
-        // Impute missing or invalid values using the column mean.
-        imputeColumnWithMean(temperature);
-        imputeColumnWithMean(precipitation);
-        imputeColumnWithMean(cloudCoverage);
-
-        // Parse the dates and convert them to ordinal values.
-        std::vector<std::string> dates = doc.GetColumn<std::string>("Date");
-        for (const auto &date : dates)
-        {
-            try
-            {
-                std::tm tm = parseDate(date); // Make sure your parseDate handles errors appropriately.
-                dateOrdinal.push_back(static_cast<float>(dateToOrdinal(tm)));
-            }
-            catch (...)
-            {
-                dateOrdinal.push_back(0.0f);
-            }
-        }
-    }
-    catch (const std::exception &e)
-    {
-        throw std::runtime_error("Error parsing weather features: " + std::string(e.what()));
-    }
-
-    // Build and return the weather features matrix.
-    std::vector<std::vector<double>> X_weather;
-    for (size_t i = 0; i < temperature.size(); i++)
-    {
-        X_weather.push_back({ static_cast<double>(temperature[i]),
-                              static_cast<double>(precipitation[i]),
-                              static_cast<double>(cloudCoverage[i]),
-                              static_cast<double>(dateOrdinal[i])});
-    }
-    return X_weather;
-}
-
-/**
- * @brief Parse site-related features from the CSV file.
- * @param doc The rapidcsv::Document object representing the CSV file.
- * @return A 2D vector of site features.
- */
-std::vector<std::vector<double>> parseSiteFeatures(rapidcsv::Document &doc) {
-    std::vector<std::string> siteID, mosquitoRank, cattailMosquito, treatedBy, action, material;
-    std::vector<float> wetlandType, wetness;
-
-    try {
-        // Parse categorical columns.
-        siteID = doc.GetColumn<std::string>("SiteID");
-        mosquitoRank = getColumnWithDefault(doc, "MosquitoRank", "Missing");
-        cattailMosquito = getColumnWithDefault(doc, "CattailMosquito", "No");
-        treatedBy = doc.GetColumn<std::string>("TreatedBy");
-        action = doc.GetColumn<std::string>("Action");
-        material = doc.GetColumn<std::string>("Material");
-
-        // Parse numeric columns using our helper.
-        wetlandType = parseNumericColumn(doc, "WetlandType");
-        wetness = parseNumericColumn(doc, "Wetness");
-    } catch (const std::exception &e) {
-        throw std::runtime_error("Error parsing site features: " + std::string(e.what()));
-    }
-
-    // Assume oneHotEncode is defined elsewhere.
-    auto siteEncoded = oneHotEncode(siteID);
-    auto mosquitoRankEncoded = oneHotEncode(mosquitoRank);
-    auto cattailMosquitoEncoded = oneHotEncode(cattailMosquito);
-    auto treatedByEncoded = oneHotEncode(treatedBy);
-    auto actionEncoded = oneHotEncode(action);
-    auto materialEncoded = oneHotEncode(material);
-
-    std::vector<std::vector<double>> X_site;
-    for (size_t i = 0; i < wetlandType.size(); i++) {
-        std::vector<double> siteRow = { static_cast<double>(wetlandType[i]), static_cast<double>(wetness[i]) };
-        for (const auto &encoded : { siteEncoded[i], mosquitoRankEncoded[i], 
-                                      cattailMosquitoEncoded[i], treatedByEncoded[i],
-                                      actionEncoded[i], materialEncoded[i] })
-        {
-            siteRow.insert(siteRow.end(), encoded.begin(), encoded.end());
-        }
-        X_site.push_back(siteRow);
-    }
-    return X_site;
-}
-
-/**
- * @brief Get a column from the CSV file, or return a default value if the column is missing.
- * @param doc The rapidcsv::Document object representing the CSV file.
- * @param columnName The name of the column to retrieve.
- * @param defaultValue The default value to use if the column is missing.
- * @return A vector of strings representing the column values.
- */
-std::vector<std::string> getColumnWithDefault(rapidcsv::Document &doc, const std::string &columnName, const std::string &defaultValue)
-{
-    try
-    {
-        return doc.GetColumn<std::string>(columnName);
-    }
-    catch (...)
-    {
-        return std::vector<std::string>(doc.GetRowCount(), defaultValue);
-    }
-}
-
-/**
- * @brief Split data into training, validation, and test sets.
- * @param X_weather The weather features.
- * @param X_site The site features.
- * @param y The labels.
- * @param X_weather_train Output: Weather training data.
- * @param X_site_train Output: Site training data.
- * @param y_train Output: Training labels.
- * @param X_weather_val Output: Weather validation data.
- * @param X_site_val Output: Site validation data.
- * @param y_val Output: Validation labels.
- * @param X_weather_test Output: Weather test data.
- * @param X_site_test Output: Site test data.
- * @param y_test Output: Test labels.
- */
-
-void splitData(const std::vector<std::vector<double>> &X_weather, 
-               const std::vector<std::vector<double>> &X_site, 
-               const std::vector<int> &y,
-               std::vector<std::vector<double>> &X_weather_train, 
-               std::vector<std::vector<double>> &X_site_train, 
-               std::vector<int> &y_train,
-               std::vector<std::vector<double>> &X_weather_val, 
-               std::vector<std::vector<double>> &X_site_val, 
-               std::vector<int> &y_val,
-               std::vector<std::vector<double>> &X_weather_test, 
-               std::vector<std::vector<double>> &X_site_test, 
-               std::vector<int> &y_test)
-{
-    size_t dataSize = y.size();
-    if (dataSize == 0) return;
-
-    // Calculate sizes:
-    // Training gets floor(0.7 * n)
-    size_t trainSize = static_cast<size_t>(std::floor(dataSize * 0.7));
+// ----------------------------------------------------------------------------
+// preprocessData
+// Reads the CSV file, processes the data (including parsing dates, handling missing
+// numeric values, label encoding, one-hot encoding for categorical fields, standard scaling),
+// and splits the data into training (70%), validation (15%), and test (15%) sets.
+// Note: This version uses order-preserving categorical encoding.
+void preprocessData(const std::string &filename,
+                    std::vector<std::vector<double>> &X_weather_train,
+                    std::vector<std::vector<double>> &X_site_train,
+                    std::vector<int> &y_train,
+                    std::vector<std::vector<double>> &X_weather_val,
+                    std::vector<std::vector<double>> &X_site_val,
+                    std::vector<int> &y_val,
+                    std::vector<std::vector<double>> &X_weather_test,
+                    std::vector<std::vector<double>> &X_site_test,
+                    std::vector<int> &y_test) {
     
-    // The remaining rows will be split equally between validation and test.
-    size_t remaining = dataSize - trainSize;
-    size_t valSize = static_cast<size_t>(std::round(remaining * 0.5)); // since 15%/30% = 0.5
-    size_t testSize = remaining - valSize;  // The rest goes to testing
-
-    // Use these counts to assign rows sequentially.
-    for (size_t i = 0; i < dataSize; i++) {
-        if (i < trainSize) {
-            X_weather_train.push_back(X_weather[i]);
-            X_site_train.push_back(X_site[i]);
-            y_train.push_back(y[i]);
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        std::cerr << "Cannot open file " << filename << std::endl;
+        exit(EXIT_FAILURE);
+    }
+    
+    std::string line;
+    // Read header (we ignore its contents here).
+    std::getline(file, line);
+    
+    // Expected header order:
+    // SiteID,WetlandType,MosquitoRank,CattailMosquito,CulexFound,TreatedBy,Date,Wetness,Action,DipCount,Material,Temperature,Precipitation,CloudCoverage
+    enum { IDX_SITEID = 0, IDX_WETLANDTYPE = 1, IDX_MOSQUITORANK = 2, IDX_CATTail = 3,
+           IDX_CULEX = 4, IDX_TREATEDBY = 5, IDX_DATE = 6, IDX_WETNESS = 7,
+           IDX_ACTION = 8, IDX_DIPCOUNT = 9, IDX_MATERIAL = 10, IDX_TEMPERATURE = 11,
+           IDX_PRECIPITATION = 12, IDX_CLOUD = 13 };
+    
+    struct RawRow {
+        std::string SiteID;
+        std::string WetlandType;
+        std::string MosquitoRank;
+        std::string CattailMosquito;
+        std::string CulexFound;
+        std::string TreatedBy;
+        std::string Date;
+        std::string Wetness;
+        std::string Action;
+        std::string DipCount;
+        std::string Material;
+        std::string Temperature;
+        std::string Precipitation;
+        std::string CloudCoverage;
+    };
+    
+    std::vector<RawRow> rawRows;
+    while (std::getline(file, line)) {
+        if (line.empty())
+            continue;
+        std::vector<std::string> tokens = split(line, ',');
+        // Ensure we have 14 tokens.
+        while (tokens.size() < 14)
+            tokens.push_back("");
+        RawRow row;
+        row.SiteID           = trim(tokens[IDX_SITEID]);
+        row.WetlandType      = trim(tokens[IDX_WETLANDTYPE]);
+        row.MosquitoRank     = trim(tokens[IDX_MOSQUITORANK]);
+        row.CattailMosquito  = trim(tokens[IDX_CATTail]);
+        row.CulexFound       = trim(tokens[IDX_CULEX]);
+        row.TreatedBy        = trim(tokens[IDX_TREATEDBY]);
+        row.Date             = trim(tokens[IDX_DATE]);
+        row.Wetness          = trim(tokens[IDX_WETNESS]);
+        row.Action           = trim(tokens[IDX_ACTION]);
+        row.DipCount         = trim(tokens[IDX_DIPCOUNT]);
+        row.Material         = trim(tokens[IDX_MATERIAL]);
+        row.Temperature      = trim(tokens[IDX_TEMPERATURE]);
+        row.Precipitation    = trim(tokens[IDX_PRECIPITATION]);
+        row.CloudCoverage    = trim(tokens[IDX_CLOUD]);
+        rawRows.push_back(row);
+    }
+    file.close();
+    
+    // For order-preserving encoding, use vectors for each categorical field.
+    std::vector<std::string> siteID_categories;
+    std::vector<std::string> mosqRank_categories;
+    std::vector<std::string> cattail_categories;
+    std::vector<std::string> culex_categories;
+    std::vector<std::string> treatedBy_categories;
+    std::vector<std::string> action_categories;
+    std::vector<std::string> material_categories;
+    
+    struct ProcessedRow {
+        int breeding;        // 1 if DipCount > 0.1, else 0.
+        double temperature;
+        double precipitation;
+        double cloud;
+        int dateOrdinal;
+        int month;
+        int day;
+        int year;
+        int siteID;         // Encoded based on order of appearance.
+        double wetlandType;
+        double wetness;
+        double dipCount;
+        int mosqRank;       // Encoded category index.
+        int cattail;
+        int culex;
+        int treatedBy;
+        int action;
+        int material;
+    };
+    
+    std::vector<ProcessedRow> processed;
+    for (const auto &r : rawRows) {
+        ProcessedRow pr;
+        double dip = 0.0;
+        try {
+            dip = r.DipCount.empty() ? 0.0 : std::stod(r.DipCount);
+        } catch (...) {
+            dip = 0.0;
         }
-        else if (i < trainSize + valSize) {
-            X_weather_val.push_back(X_weather[i]);
-            X_site_val.push_back(X_site[i]);
-            y_val.push_back(y[i]);
+        pr.dipCount = dip;
+        pr.breeding = (dip > 0.1) ? 1 : 0;
+        
+        int mon, d, yr;
+        int dateOrd = 0;
+        if (!r.Date.empty())
+            dateOrd = parseDateOrdinal(r.Date, mon, d, yr);
+        pr.dateOrdinal = dateOrd;
+        pr.month = mon;
+        pr.day = d;
+        pr.year = yr;
+        
+        try { pr.temperature = r.Temperature.empty() ? 0.0 : std::stod(r.Temperature); } catch (...) { pr.temperature = 0.0; }
+        try { pr.precipitation = r.Precipitation.empty() ? 0.0 : std::stod(r.Precipitation); } catch (...) { pr.precipitation = 0.0; }
+        try { pr.cloud = r.CloudCoverage.empty() ? 0.0 : std::stod(r.CloudCoverage); } catch (...) { pr.cloud = 0.0; }
+        
+        try { pr.wetlandType = r.WetlandType.empty() ? 0.0 : std::stod(r.WetlandType); } catch (...) { pr.wetlandType = 0.0; }
+        try { pr.wetness = r.Wetness.empty() ? 0.0 : std::stod(r.Wetness); } catch (...) { pr.wetness = 0.0; }
+        
+        // Use "Missing" if the field is empty.
+        std::string sSiteID = r.SiteID.empty() ? "Missing" : r.SiteID;
+        pr.siteID = getCategoryIndex(siteID_categories, sSiteID);
+        
+        std::string sMosqRank = r.MosquitoRank.empty() ? "Missing" : r.MosquitoRank;
+        pr.mosqRank = getCategoryIndex(mosqRank_categories, sMosqRank);
+        
+        std::string sCattail = r.CattailMosquito.empty() ? "Missing" : r.CattailMosquito;
+        pr.cattail = getCategoryIndex(cattail_categories, sCattail);
+        
+        std::string sCulex = r.CulexFound.empty() ? "Missing" : r.CulexFound;
+        pr.culex = getCategoryIndex(culex_categories, sCulex);
+        
+        std::string sTreated = r.TreatedBy.empty() ? "Missing" : r.TreatedBy;
+        pr.treatedBy = getCategoryIndex(treatedBy_categories, sTreated);
+        
+        std::string sAction = r.Action.empty() ? "Missing" : r.Action;
+        pr.action = getCategoryIndex(action_categories, sAction);
+        
+        std::string sMaterial = r.Material.empty() ? "Missing" : r.Material;
+        pr.material = getCategoryIndex(material_categories, sMaterial);
+        
+        processed.push_back(pr);
+    }
+    
+    // Shuffle processed rows to mimic Python's train_test_split(random_state=42)
+    std::default_random_engine engine(42);
+    std::shuffle(processed.begin(), processed.end(), engine);
+    
+    int num_samples = processed.size();
+    
+    // Weather features: [Temperature, Precipitation, CloudCoverage, DateOrdinal, Month, Day, Year]
+    int weather_dim = 7;
+    std::vector<std::vector<double>> all_weather(num_samples, std::vector<double>(weather_dim, 0.0));
+    
+    // Site features: [SiteID, WetlandType, Wetness, DipCount] plus one-hot columns
+    // for: MosquitoRank, CattailMosquito, CulexFound, TreatedBy, Action, Material.
+    int site_dim = 4 + 
+                   static_cast<int>(mosqRank_categories.size()) +
+                   static_cast<int>(cattail_categories.size()) +
+                   static_cast<int>(culex_categories.size()) +
+                   static_cast<int>(treatedBy_categories.size()) +
+                   static_cast<int>(action_categories.size()) +
+                   static_cast<int>(material_categories.size());
+    std::vector<std::vector<double>> all_site(num_samples, std::vector<double>(site_dim, 0.0));
+    
+    std::vector<int> all_labels(num_samples, 0);
+    
+    for (int i = 0; i < num_samples; i++) {
+        const ProcessedRow &pr = processed[i];
+        // Weather: Temperature, Precipitation, Cloud, DateOrdinal, Month, Day, Year.
+        all_weather[i][0] = pr.temperature;
+        all_weather[i][1] = pr.precipitation;
+        all_weather[i][2] = pr.cloud;
+        all_weather[i][3] = pr.dateOrdinal;
+        all_weather[i][4] = pr.month;
+        all_weather[i][5] = pr.day;
+        all_weather[i][6] = pr.year;
+        all_labels[i] = pr.breeding;
+        
+        int idx = 0;
+        // Insert numeric site features: SiteID (encoded index), WetlandType, Wetness, DipCount.
+        all_site[i][idx++] = pr.siteID;
+        all_site[i][idx++] = pr.wetlandType;
+        all_site[i][idx++] = pr.wetness;
+        all_site[i][idx++] = pr.dipCount;
+        
+        // One-hot encoding for MosquitoRank – order preserved as in mosqRank_categories.
+        for (int j = 0; j < static_cast<int>(mosqRank_categories.size()); j++) {
+            all_site[i][idx++] = (j == pr.mosqRank) ? 1.0 : 0.0;
         }
-        else {
-            X_weather_test.push_back(X_weather[i]);
-            X_site_test.push_back(X_site[i]);
-            y_test.push_back(y[i]);
+        // One-hot for CattailMosquito.
+        for (int j = 0; j < static_cast<int>(cattail_categories.size()); j++) {
+            all_site[i][idx++] = (j == pr.cattail) ? 1.0 : 0.0;
+        }
+        // One-hot for CulexFound.
+        for (int j = 0; j < static_cast<int>(culex_categories.size()); j++) {
+            all_site[i][idx++] = (j == pr.culex) ? 1.0 : 0.0;
+        }
+        // One-hot for TreatedBy.
+        for (int j = 0; j < static_cast<int>(treatedBy_categories.size()); j++) {
+            all_site[i][idx++] = (j == pr.treatedBy) ? 1.0 : 0.0;
+        }
+        // One-hot for Action.
+        for (int j = 0; j < static_cast<int>(action_categories.size()); j++) {
+            all_site[i][idx++] = (j == pr.action) ? 1.0 : 0.0;
+        }
+        // One-hot for Material.
+        for (int j = 0; j < static_cast<int>(material_categories.size()); j++) {
+            all_site[i][idx++] = (j == pr.material) ? 1.0 : 0.0;
         }
     }
+    
+    // Standardize weather and site matrices separately.
+    std::vector<double> weather_mean, weather_std;
+    computeMeanStd(all_weather, weather_mean, weather_std);
+    standardizeData(all_weather, weather_mean, weather_std);
+    
+    std::vector<double> site_mean, site_std;
+    computeMeanStd(all_site, site_mean, site_std);
+    standardizeData(all_site, site_mean, site_std);
+    
+    // Split into training (70%), validation (15%), and test (15%).
+    int train_end = num_samples * 70 / 100;
+    int val_end = num_samples * 85 / 100;
+    
+    X_weather_train.assign(all_weather.begin(), all_weather.begin() + train_end);
+    X_site_train.assign(all_site.begin(), all_site.begin() + train_end);
+    y_train.assign(all_labels.begin(), all_labels.begin() + train_end);
+    
+    X_weather_val.assign(all_weather.begin() + train_end, all_weather.begin() + val_end);
+    X_site_val.assign(all_site.begin() + train_end, all_site.begin() + val_end);
+    y_val.assign(all_labels.begin() + train_end, all_labels.begin() + val_end);
+    
+    X_weather_test.assign(all_weather.begin() + val_end, all_weather.end());
+    X_site_test.assign(all_site.begin() + val_end, all_site.end());
+    y_test.assign(all_labels.begin() + val_end, all_labels.end());
 }
-
-/**
- * @brief Parse the raw DipCount column as continuous values for regression.
- * @param doc The rapidcsv::Document object representing the CSV file.
- * @return A vector of float values representing the raw DipCount (with missing values interpolated).
- */
-std::vector<float> parseDipCountReg(rapidcsv::Document &doc) {
-    std::vector<float> dipCount;
-    try {
-        std::vector<std::string> dipCountRaw = doc.GetColumn<std::string>("DipCount");
-        for (const auto &value : dipCountRaw) {
-            try {
-                dipCount.push_back(std::stof(value));
-            } catch (...) {
-                dipCount.push_back(NAN); // Mark missing/invalid values as NaN.
-            }
-        }
-    } catch (const std::exception &e) {
-        throw std::runtime_error("Error parsing 'DipCount' column for regression: " + std::string(e.what()));
-    }
-
-    // Interpolate missing values to preserve continuity.
-    interpolateColumn(dipCount);
-    return dipCount;
-}
-
-/**
- * @brief Split data into training, validation, and test sets, with labels as floats for regression.
- * @param X_weather The weather features.
- * @param X_site The site features.
- * @param y A vector of continuous labels.
- * @param X_weather_train Output: Weather training data.
- * @param X_site_train Output: Site training data.
- * @param y_train Output: Training labels (floats).
- * @param X_weather_val Output: Weather validation data.
- * @param X_site_val Output: Site validation data.
- * @param y_val Output: Validation labels (floats).
- * @param X_weather_test Output: Weather test data.
- * @param X_site_test Output: Site test data.
- * @param y_test Output: Test labels (floats).
- */
-void splitDataRegression(const std::vector<std::vector<double>> &X_weather, 
-                         const std::vector<std::vector<double>> &X_site, 
-                         const std::vector<float> &y,
-                         std::vector<std::vector<double>> &X_weather_train, 
-                         std::vector<std::vector<double>> &X_site_train, 
-                         std::vector<float> &y_train,
-                         std::vector<std::vector<double>> &X_weather_val, 
-                         std::vector<std::vector<double>> &X_site_val, 
-                         std::vector<float> &y_val,
-                         std::vector<std::vector<double>> &X_weather_test, 
-                         std::vector<std::vector<double>> &X_site_test, 
-                         std::vector<float> &y_test)
-{
-    size_t dataSize = y.size();
-    if (dataSize == 0) return;
-
-    // Use 70% for training.
-    size_t trainSize = static_cast<size_t>(std::floor(dataSize * 0.7));
-    // Split the rest equally between validation and test.
-    size_t remaining = dataSize - trainSize;
-    size_t valSize = static_cast<size_t>(std::round(remaining * 0.5));
-    size_t testSize = remaining - valSize;
-
-    for (size_t i = 0; i < dataSize; i++) {
-        if (i < trainSize) {
-            X_weather_train.push_back(X_weather[i]);
-            X_site_train.push_back(X_site[i]);
-            y_train.push_back(y[i]);
-        } else if (i < trainSize + valSize) {
-            X_weather_val.push_back(X_weather[i]);
-            X_site_val.push_back(X_site[i]);
-            y_val.push_back(y[i]);
-        } else {
-            X_weather_test.push_back(X_weather[i]);
-            X_site_test.push_back(X_site[i]);
-            y_test.push_back(y[i]);
-        }
-    }
-}
-
-/**
- * @brief Preprocess the data from a CSV file for regression.
- *
- * This function reads the CSV file, parses weather features, site features, and continuous dip count labels,
- * performs standard scaling, and splits the data into training, validation, and test sets.
- *
- * @param filePath The path to the CSV file.
- * @param X_weather_train Output: Weather training data.
- * @param X_site_train Output: Site training data.
- * @param y_train Output: Training labels (as floats).
- * @param X_weather_val Output: Weather validation data.
- * @param X_site_val Output: Site validation data.
- * @param y_val Output: Validation labels (as floats).
- * @param X_weather_test Output: Weather test data.
- * @param X_site_test Output: Site test data.
- * @param y_test Output: Test labels (as floats).
- */
-void preprocessDataRegression(const std::string &filePath,
-                              std::vector<std::vector<double>> &X_weather_train, 
-                              std::vector<std::vector<double>> &X_site_train, 
-                              std::vector<float> &y_train,
-                              std::vector<std::vector<double>> &X_weather_val, 
-                              std::vector<std::vector<double>> &X_site_val, 
-                              std::vector<float> &y_val,
-                              std::vector<std::vector<double>> &X_weather_test, 
-                              std::vector<std::vector<double>> &X_site_test, 
-                              std::vector<float> &y_test)
-{
-    try {
-        // Load the CSV file.
-        rapidcsv::Document doc(filePath);
-
-        // Parse continuous DipCount for regression.
-        auto y = parseDipCountReg(doc);
-
-        // Parse weather and site features.
-        auto X_weather = parseWeatherFeatures(doc);
-        auto X_site = parseSiteFeatures(doc);
-
-        // Normalize numeric features.
-        standardScale(X_weather);
-        standardScale(X_site);
-
-        // Split the data into training, validation, and test sets.
-        splitDataRegression(X_weather, X_site, y, 
-                            X_weather_train, X_site_train, y_train,
-                            X_weather_val, X_site_val, y_val,
-                            X_weather_test, X_site_test, y_test);
-    } catch (const std::exception &e) {
-        std::cerr << "Error in preprocessDataRegression: " << e.what() << std::endl;
-        throw; // Re-throw for debugging purposes.
-    }
-}
-

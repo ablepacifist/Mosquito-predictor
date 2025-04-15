@@ -1,9 +1,10 @@
-#include "../include/memory_man.h"
-#include "../include/cudnn_utils.h" 
-#include "../include/error_checking.h"
-#include "../include/weight_init.h" 
-#include <cuda_runtime.h>
-#include <iostream>
+#include "../include/utils/memory_man.h"   // Memory management utilities
+#include "../include/utils/cudnn_utils.h" // Centralized cuDNN utilities
+#include "../include/utils/error_checking.h" // For CUDA and cuDNN error checking
+#include "../include/utils/weight_init.h"  // For weight initialization functions
+#include <cuda_runtime.h>                  // Necessary for CUDA runtime APIs
+#include <iostream>                        // For standard I/O
+
 
 void allocateNetworkResources(cudnnHandle_t cudnn, NetworkResources &res,
                               int batchSize, int weather_channels, int weather_height, int weather_width,

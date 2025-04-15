@@ -1,20 +1,21 @@
 #include "../include/cnn_model.h"
-#include "../include/conv_layer.h"
-#include "../include/dense_layer.h"
-#include "../include/error_checking.h"
-#include "../include/optimizers.h"
-#include "../include/cudnn_utils.h"
-#include "../include/dense_kernels.h"
-#include "../include/loss_kernels.h"
-#include "../include/weight_init.h"
+#include "../include/layers/conv_layer.h"
+#include "../include/layers/dense_layer.h"
+#include "../include/utils/error_checking.h"
+#include "../include/utils/cudnn_utils.h"
+#include "../include/utils/dense_kernels.h"
+#include "../include/optimizers/optimizers.h"
+#include "../include/utils/weight_init.h"
+#include "../include/loss/loss_kernels.h"
 
-#include <cublas_v2.h>
-#include <cuda_runtime.h>
-#include <cudnn.h>
-#include <iostream>
-#include <vector>
-#include <cstdlib>
-
+#include <cublas_v2.h>    // cuBLAS handle and functions
+#include <cuda_runtime.h> // CUDA runtime APIs
+#include <cudnn.h>        // cuDNN operations
+#include <iostream>       // For standard I/O
+#include <vector>         // For handling STL vectors
+#include <cstdlib>        // For general utilities like `exit()`
+#include <string>
+#include <map>
 //-----------------------------------------------------------------------------
 // CNNModel Implementation
 //-----------------------------------------------------------------------------
@@ -155,7 +156,7 @@ void CNNModel::cleanup()
     CUBLAS_CHECK(cublasDestroy(cublasHandle));
 }
 
-// Forward pass: mirror the Keras model
+
 void CNNModel::forward()
 {
     int batchSize = weather_input_shape[0];
@@ -163,27 +164,77 @@ void CNNModel::forward()
     // --- Weather Branch ---
     // Perform convolution on weather input.
     weatherConv->forward(weather_input_desc, d_weather_input);
-    // weatherConv->getOutput() is the convolution output.
-    weatherDense->forward(weatherConv->getOutput(), batchSize);
-    float *weather_features = weatherDense->getOutput(); // shape: [batchSize x 64]
+    // Debug: Print first 10 values from weather convolution output.
+    {
+        int numPrint = 10;
+        std::vector<float> h_weatherConv(numPrint);
+        CUDA_CHECK(cudaMemcpy(h_weatherConv.data(), weatherConv->getOutput(), numPrint * sizeof(float), cudaMemcpyDeviceToHost));
+ //       std::cout << "CNNModel::forward: WeatherConv output, first values: ";
+        
+ /*
+    for (float v : h_weatherConv) {
+            std::cout << v << " ";
+        }
+        std::cout << std::endl;
+        */
+    }
 
+    // Process weather branch through dense layer.
+    weatherDense->forward(weatherConv->getOutput(), batchSize);
+    float *weather_features = weatherDense->getOutput(); // Expected shape: [batchSize x 64]
+    {
+        int numPrint = 10;
+        std::vector<float> h_weatherFeatures(numPrint);
+        CUDA_CHECK(cudaMemcpy(h_weatherFeatures.data(), weather_features, numPrint * sizeof(float), cudaMemcpyDeviceToHost));
+    //    std::cout << "CNNModel::forward: WeatherDense output, first values: ";
+    /*
+        for (float v : h_weatherFeatures) {
+            std::cout << v << " ";
+        }
+        std::cout << std::endl;
+*/
+    }
     // --- Site Branch ---
     siteDense->forward(d_site_input, batchSize);
-    float *site_features = siteDense->getOutput(); // shape: [batchSize x 64]
+    float *site_features = siteDense->getOutput(); // Expected shape: [batchSize x 64]
+    {
+        int numPrint = 10;
+        std::vector<float> h_siteFeatures(numPrint);
+        CUDA_CHECK(cudaMemcpy(h_siteFeatures.data(), site_features, numPrint * sizeof(float), cudaMemcpyDeviceToHost));
+  //      std::cout << "CNNModel::forward: SiteDense output, first values: ";
+    /*    
+    for (float v : h_siteFeatures) {
+            std::cout << v << " ";
+        }
+        std::cout << std::endl;
+        */
+    }
 
     // --- Concatenation ---
-    // Combined features = concatenate(weather_features, site_features) -> [batchSize x 128]
+    // Combined features: concatenate weather_features and site_features -> [batchSize x 128]
     int combined_dim = 128; // 64 + 64
     float *d_concat = nullptr;
     CUDA_CHECK(cudaMalloc(&d_concat, batchSize * combined_dim * sizeof(float)));
     int concatBlockSize = 256;
     int concatGridSize = (batchSize + concatBlockSize - 1) / concatBlockSize;
-    // Call a kernel that concatenates along the feature dimension.
-    // It copies 64 features from weather_features and then 64 from site_features for each sample.
+    // Launch kernel to concatenate along feature dimension.
     concatenateKernel<<<concatGridSize, concatBlockSize>>>(weather_features, site_features, d_concat, 64, 64, batchSize);
     CUDA_CHECK(cudaDeviceSynchronize());
+    // Debug: Print first 10 concatenated values.
+    {
+        int numPrint = 10;
+        std::vector<float> h_concat(numPrint);
+        CUDA_CHECK(cudaMemcpy(h_concat.data(), d_concat, numPrint * sizeof(float), cudaMemcpyDeviceToHost));
+  //      std::cout << "CNNModel::forward: Concatenated output d_concat, first values: ";
+       /*
+        for (float v : h_concat) {
+            std::cout << v << " ";
+        }
+        std::cout << std::endl;
+        */
+    }
 
-    // Save the concatenated buffer for backward propagation.
+    // Save the concatenated buffer for backpropagation.
     d_concat_dense1 = d_concat;
 
     // --- Combined Branch FC Layers ---
@@ -210,7 +261,22 @@ void CNNModel::forward()
                                     outDesc,
                                     outputLayer->getOutput()));
     CUDNN_CHECK(cudnnDestroyTensorDescriptor(outDesc));
+
+    // Debug: Print first 10 values of final output.
+    {
+        int numPrint = 10;
+        std::vector<float> h_final(numPrint);
+        CUDA_CHECK(cudaMemcpy(h_final.data(), outputLayer->getOutput(), numPrint * sizeof(float), cudaMemcpyDeviceToHost));
+  //      std::cout << "CNNModel::forward: Final softmax output, first values: ";
+        /*
+        for (float v : h_final) {
+            std::cout << v << " ";
+        }
+        std::cout << std::endl;
+        */
+    }
 }
+
 
 // Full backward pass: using the loss gradient from the network output.
 void CNNModel::backward(float *d_loss_grad)

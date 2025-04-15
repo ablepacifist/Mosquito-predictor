@@ -1,5 +1,5 @@
 // random_dataset.cpp
-#include "../include/random_dataset.h"  // Make sure this header declares train_and_evaluate()
+#include "../include/prototypes/random_dataset.h"  // Make sure this header declares train_and_evaluate()
 #include <vector>
 #include <random>
 #include <iostream>

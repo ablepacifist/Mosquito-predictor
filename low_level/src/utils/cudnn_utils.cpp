@@ -1,7 +1,8 @@
-#include "cudnn_utils.h"
-#include <cudnn.h>
-#include <cstdlib>
-#include <iostream>
+#include "../include/utils/cudnn_utils.h"    // Centralized cuDNN utilities
+#include <cudnn.h>                          // cuDNN-specific types and functions
+#include <cstdlib>                          // General utilities like `exit()`
+#include <iostream>                         // For standard I/O operations
+
 
 cudnnTensorDescriptor_t createTensorDescriptor(
     int n, int c, int h, int w,

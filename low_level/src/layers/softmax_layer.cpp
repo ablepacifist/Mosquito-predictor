@@ -1,9 +1,10 @@
-#include "../include/softmax_layer.h"
-#include "../include/error_checking.h"
-#include <cudnn.h>
-#include <cstdlib>
-#include <iostream>
-#include <cuda_runtime.h>
+#include "../include/layers/softmax_layer.h"   // Adjusted for directory structure
+#include "../include/utils/error_checking.h"  // For CUDA_CHECK
+#include <cudnn.h>                            // Necessary for cuDNN operations
+#include <cstdlib>                            // For standard functions like `exit()`
+#include <iostream>                           // For error messages
+#include <cuda_runtime.h>                     // For CUDA runtime APIs
+
 
 void softmaxForward(
     cudnnHandle_t handle,

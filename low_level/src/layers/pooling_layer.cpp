@@ -1,7 +1,8 @@
-#include "../include/pooling_layer.h"
-#include <cudnn.h>
-#include <cstdlib>
-#include <iostream>
+#include "../include/layers/pooling_layer.h"               // Adjusted for proper directory structure
+#include <cudnn.h>                                         // Necessary for cuDNN types
+#include <cstdlib>                                         // For general utility functions like `exit()`
+#include <iostream>                                        // For error messages
+
 
 void poolingForward(
     cudnnHandle_t handle,

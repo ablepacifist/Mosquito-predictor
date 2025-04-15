@@ -1,18 +1,18 @@
-// mnist_io.cpp
-#include "../include/mnsit_io.h"
-#include "../include/memory_man.h"       // Provides allocateNetworkResources & cleanupNetworkResources.
-#include "../include/conv_layer.h"         // convForward.
-#include "../include/activation_layer.h"   // activationForward.
-#include "../include/softmax_layer.h"      // softmaxForward.
-#include <cudnn.h>
-#include <cuda_runtime.h>
-#include "../include/train_evaluate.h"
-#include <iostream>
-#include "../include/mnsit_io.h"                        // MNIST data loading functions.
-#include <vector>
-#include <cstring> // for memset
-#include <filesystem>
-#include <fstream> 
+#include "../include/prototypes/mnsit_io.h"               // MNIST data loading functions
+#include "../include/utils/memory_man.h"            // Provides allocateNetworkResources & cleanupNetworkResources
+#include "../include/layers/conv_layer.h"     // convForward
+#include "../include/layers/activation_layer.h" // activationForward
+#include "../include/layers/softmax_layer.h"  // softmaxForward
+#include "../include/train_evaluate.h"        // Training and evaluation workflow
+#include "../include/utils/error_checking.h"  // Error-checking macros
+
+#include <cudnn.h>                            // cuDNN-specific types and functions
+#include <cuda_runtime.h>                     // CUDA runtime APIs
+#include <iostream>                           // For standard I/O operations
+#include <vector>                             // For STL vector
+#include <cstring>                            // For memset
+#include <filesystem>                         // For filesystem utilities
+#include <fstream>                            // For file I/O operations
 
 
 
