@@ -7,6 +7,8 @@
 #include <cudnn.h>
 #include <cublas_v2.h>
 #include <iostream>
+#include <limits>
+#include <cmath>
 
 // Macro for checking CUDA API calls.
 #define CUDA_CHECK(call) {                                          \
@@ -36,6 +38,7 @@
         exit(EXIT_FAILURE);                                             \
     }                                                                   \
 }
+
 inline void checkCudaError(const char* msg) {
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
@@ -46,7 +49,7 @@ inline void checkCudaError(const char* msg) {
 
 inline bool containsNaNorInf(const float* d_data, int totalElements) {
     float* h_data = new float[totalElements];
-    cudaMemcpy(h_data, d_data, totalElements * sizeof(float), cudaMemcpyDeviceToHost);
+    CUDA_CHECK(cudaMemcpy(h_data, d_data, totalElements * sizeof(float), cudaMemcpyDeviceToHost));
     for (int i = 0; i < totalElements; i++) {
         if (std::isnan(h_data[i]) || std::isinf(h_data[i])) {
             std::cerr << "Found NaN or INF at index " << i << ": " << h_data[i] << std::endl;
@@ -57,6 +60,7 @@ inline bool containsNaNorInf(const float* d_data, int totalElements) {
     delete[] h_data;
     return false;
 }
+
 inline void printArrayStats(const float* d_arr, int size, const char* name) {
     float* h_arr = new float[size];
     CUDA_CHECK(cudaMemcpy(h_arr, d_arr, size * sizeof(float), cudaMemcpyDeviceToHost));
@@ -72,8 +76,9 @@ inline void printArrayStats(const float* d_arr, int size, const char* name) {
         sum += val;
     }
     double avg = sum / size;
-    //std::cout << name << ": min = " << minVal << "  max = " << maxVal << "  avg = " << avg << std::endl;
+    std::cout << name << ": min = " << minVal << "  max = " << maxVal << "  avg = " << avg << std::endl;
     
     delete[] h_arr;
 }
+
 #endif // ERROR_CHECKING_H

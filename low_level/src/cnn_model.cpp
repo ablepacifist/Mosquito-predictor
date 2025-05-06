@@ -347,15 +347,43 @@ void CNNModel::backward(float *d_loss_grad)
 
 
 // Train function: iterates over mini-batches, performing forward/backward passes.
+#include "cnn_model.h"
+#include <fstream>
+#include <iostream>
+#include <limits>
+#include <direct.h>  // for _mkdir on Windows
+
 void CNNModel::train(float *X_weather, float *X_site, float *y,
                      int num_samples, int batch_size, int epochs,
                      float *X_weather_val, float *X_site_val, float *y_val,
                      int num_val_samples)
 {
+    // (Optional) Create the logging folder if needed.
+    std::string folder = "E:\\Code\\MMCD\\low_level\\data";
+    if (_mkdir(folder.c_str()) != 0) {
+        // It is ok if the folder already exists.
+    }
+    
+    // Open an absolute CSV file for logging.
+    std::string csvPath = folder + "\\training_log.csv";
+    std::ofstream logFile(csvPath.c_str(), std::ios::out);
+    if (!logFile.is_open()) {
+        std::cerr << "ERROR: Could not open CSV file for writing at: " << csvPath << std::endl;
+        // Continue without logging if needed.
+    }
+    else {
+        // Write header.
+        logFile << "Epoch,TrainingLoss,ValidationAccuracy" << std::endl;
+    }
+    
     int num_batches = num_samples / batch_size;
     for (int epoch = 0; epoch < epochs; epoch++)
     {
         std::cout << "Epoch " << (epoch + 1) << "/" << epochs << std::endl;
+        
+        // (Optional) Reset any accumulators for training loss here if you add that later.
+        // We'll log "NaN" as a placeholder since no training loss is computed.
+        
         for (int batch = 0; batch < num_batches; batch++)
         {
             int weather_flat_size = weather_input_shape[1] * weather_input_shape[2] * weather_input_shape[3];
@@ -403,11 +431,24 @@ void CNNModel::train(float *X_weather, float *X_site, float *y,
             std::cout << "\rBatch " << (batch + 1) << "/" << num_batches << std::flush;
         }
 
-        // End of epoch: evaluate on validation data.
+        // End-of-epoch: evaluate on validation data.
         float val_acc = evaluate(X_weather_val, X_site_val, y_val, num_val_samples);
         std::cout << "\nValidation Accuracy: " << val_acc << std::endl;
+        
+        // Log the epoch number, placeholder training loss, and validation accuracy.
+        if (logFile.is_open()) {
+            double trainingLoss = std::numeric_limits<double>::quiet_NaN(); // since no loss is computed
+            logFile << (epoch + 1) << "," << trainingLoss << "," << val_acc << std::endl;
+            logFile.flush();
+        }
     }
     std::cout << "Training complete." << std::endl;
+    
+    if (logFile.is_open())
+    {
+        logFile.close();
+        std::cout << "CSV file closed at: " << csvPath << std::endl;
+    }
 }
 
 // Evaluate: runs forward pass on test data and computes accuracy.
