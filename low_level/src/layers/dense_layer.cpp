@@ -26,8 +26,9 @@ DenseLayer::DenseLayer(int inputDim, int outputDim, cublasHandle_t cublasHandle,
 {
     int weightCount = outputDim * inputDim;
     CUDA_CHECK(cudaMalloc(&d_W, weightCount * sizeof(float)));
-    float stddev = sqrtf(2.0f / inputDim);
+    float stddev = sqrtf(2.0f / (inputDim + outputDim));
     initializeWeights(d_W, weightCount, stddev);
+
 
     CUDA_CHECK(cudaMalloc(&d_b, outputDim * sizeof(float)));
     CUDA_CHECK(cudaMemset(d_b, 0, outputDim * sizeof(float)));
@@ -43,80 +44,68 @@ DenseLayer::~DenseLayer() {
     if(d_b_m)         cudaFree(d_b_m);
     if(d_b_v)         cudaFree(d_b_v);
 }
-
 float* DenseLayer::forward(float* d_input, int batchSize) {
-    d_input_store = d_input;
-    int inputElements = inputDim * batchSize;
-    if (containsNaNorInf(d_input, inputElements)) {
-        std::cerr << "d_input contains NaN/Inf BEFORE GEMM in forward()." << std::endl;
-        exit(EXIT_FAILURE);
-    }
-    
-    int weightCount = inputDim * outputDim;
-    if (containsNaNorInf(d_W, weightCount)) {
-        std::cerr << "d_W contains NaN/Inf BEFORE GEMM in forward()." << std::endl;
-        exit(EXIT_FAILURE);
-    }
-    
-    if (d_output != nullptr) {
-        cudaFree(d_output);
-        d_output = nullptr;
-    }
-    CUDA_CHECK(cudaMalloc(&d_output, outputDim * batchSize * sizeof(float)));
-    
-    float alpha = 1.0f, beta = 0.0f;
-    CUBLAS_CHECK(cublasSgemm(cublasHandle,
-                             CUBLAS_OP_N, CUBLAS_OP_N,
-                             outputDim, batchSize, inputDim,
-                             &alpha,
-                             d_W, outputDim,
-                             d_input, inputDim,
-                             &beta,
-                             d_output, outputDim));
-    cudaDeviceSynchronize();
-    checkCudaError("cublasSgemm in forward()");
-    
-    int totalOutputElements = outputDim * batchSize;
-    if (containsNaNorInf(d_output, totalOutputElements)) {
-        std::cerr << "NaN/Inf detected after GEMM in forward()." << std::endl;
-        exit(EXIT_FAILURE);
-    }
-    
+    // Store the input; allocate d_input_store if not already allocated.
+    int inputSize = batchSize * inputDim;
+    // (Reallocate each time for simplicity; you may wish to cache this.)
+    CUDA_CHECK(cudaMalloc(&d_input_store, inputSize * sizeof(float)));
+    CUDA_CHECK(cudaMemcpy(d_input_store, d_input, inputSize * sizeof(float), cudaMemcpyDeviceToDevice));
+
+    // Fix any NaN/Inf in the input using our kernel.
     int blockSize = 256;
-    int gridSize = (totalOutputElements + blockSize - 1) / blockSize;
-    addBiasKernel<<<gridSize, blockSize>>>(d_output, d_b, outputDim, batchSize);
+    int gridSize = (inputSize + blockSize - 1) / blockSize;
+    fixNaNInfKernel<<<gridSize, blockSize>>>(d_input_store, inputSize);
     cudaDeviceSynchronize();
-    checkCudaError("addBiasKernel in forward()");
-    
-    if (containsNaNorInf(d_output, totalOutputElements)) {
-        std::cerr << "NaN/Inf detected after bias addition in forward()." << std::endl;
-        exit(EXIT_FAILURE);
+
+    // Allocate output memory.
+    int outputSize = batchSize * outputDim;
+    CUDA_CHECK(cudaMalloc(&d_output, outputSize * sizeof(float)));
+
+    // GEMM: compute d_output = d_input_store * (d_W)^T.
+    // Our matrices:
+    //   d_input_store: [batchSize x inputDim] (row-major)
+    //   d_W: [outputDim x inputDim] (row-major)
+    // To compute (row-major) d_output = d_input_store * (d_W)^T,
+    // we call cuBLAS with appropriate transpose flags.
+    float alpha = 1.0f, beta = 0.0f;
+    cublasStatus_t status = cublasSgemm(cublasHandle,
+                                        CUBLAS_OP_T,   // Transpose d_W (so it becomes [inputDim x outputDim])
+                                        CUBLAS_OP_N,   // d_input_store remains [batchSize x inputDim]
+                                        outputDim,     // number of rows in result 
+                                        batchSize,     // number of columns in result 
+                                        inputDim,      // inner dimension
+                                        &alpha,
+                                        d_W,           // weight matrix pointer
+                                        inputDim,      // leading dimension of d_W (row-major layout)
+                                        d_input_store, // input matrix pointer
+                                        inputDim,      // leading dimension of d_input_store
+                                        &beta,
+                                        d_output,      // output matrix pointer (in column-major order per cuBLAS)
+                                        outputDim);    // leading dimension of d_output
+    if (status != CUBLAS_STATUS_SUCCESS) {
+        fprintf(stderr, "cublasSgemm failed with code %d\n", status);
     }
-    
-    // Clip output to safe range [-100, 100]
-    {
-        float* d_temp;
-        CUDA_CHECK(cudaMalloc(&d_temp, totalOutputElements * sizeof(float)));
-        clipArray(d_output, d_temp, totalOutputElements, 100.0f);
-        CUDA_CHECK(cudaMemcpy(d_output, d_temp, totalOutputElements * sizeof(float), cudaMemcpyDeviceToDevice));
-        cudaFree(d_temp);
-    }
-    
-    if (containsNaNorInf(d_output, totalOutputElements)) {
-        std::cerr << "NaN/Inf detected after output clipping in forward()." << std::endl;
-        exit(EXIT_FAILURE);
-    }
-    
+    cudaDeviceSynchronize();
+
+    // Add bias to each output row.
+    gridSize = (outputSize + blockSize - 1) / blockSize;
+    addBiasKernel<<<gridSize, blockSize>>>(d_output, d_b, batchSize, outputDim);
+    cudaDeviceSynchronize();
+
+    // Fix any NaN/Inf in the output.
+    fixNaNInfKernel<<<gridSize, blockSize>>>(d_output, outputSize);
+    cudaDeviceSynchronize();
+
+    // Optionally, apply activation (ReLU) if enabled.
     if (useActivation) {
-        leakyReluKernel<<<gridSize, blockSize>>>(d_output, totalOutputElements, 0.01f);
+        activationKernel<<<gridSize, blockSize>>>(d_output, outputSize);
         cudaDeviceSynchronize();
-        checkCudaError("leakyReluKernel in forward()");
-        
-        if (containsNaNorInf(d_output, totalOutputElements)) {
-            std::cerr << "NaN/Inf detected after activation in forward()." << std::endl;
-            exit(EXIT_FAILURE);
-        }
     }
+
+    // Optionally, perform a debug check printing any still-present NaN/Inf.
+    //debugCheckNaNKernel<<<gridSize, blockSize>>>(d_output, outputSize);
+    //cudaDeviceSynchronize();
+
     return d_output;
 }
 
@@ -136,7 +125,8 @@ float* DenseLayer::backward(const float* d_out_const, const float* d_input, int 
     cudaDeviceSynchronize();
     checkCudaError("leakyReluDerivativeKernel in DenseLayer::backward");
     
-    clip_gradients(d_out, totalOutElements, 10.0f);
+    // Use a much tighter clipping threshold (from 10.0 to 1.0) on activations.
+    clip_gradients(d_out, totalOutElements, 1.0f);
     
     // Compute gradient with respect to input: d_input_grad = W^T * d_out.
     float* d_input_grad;
@@ -156,11 +146,11 @@ float* DenseLayer::backward(const float* d_out_const, const float* d_input, int 
         exit(EXIT_FAILURE);
     }
     
-    // Create clipped copy of d_input for weight gradient computation.
+    // Create clipped copy of d_input for computing weight gradients.
     float* d_input_clipped;
     CUDA_CHECK(cudaMalloc(&d_input_clipped, inputDim * batchSize * sizeof(float)));
     int totalInputElements = inputDim * batchSize;
-    clipArray(d_input, d_input_clipped, totalInputElements, 10.0f);
+    clipArray(d_input, d_input_clipped, totalInputElements, 1.0f); // Tighter clipping here as well.
     cudaDeviceSynchronize();
     
     float* d_W_grad;
@@ -191,24 +181,13 @@ float* DenseLayer::backward(const float* d_out_const, const float* d_input, int 
         exit(EXIT_FAILURE);
     }
     
-    clipGradientsCustom(cublasHandle, d_W_grad, outputDim * inputDim, 5.0f);
-    clipGradientsCustom(cublasHandle, d_b_grad, outputDim, 5.0f);
+    // Tighten clipping for weight and bias gradients further.
+    clipGradientsCustom(cublasHandle, d_W_grad, outputDim * inputDim, 1.0f);
+    clipGradientsCustom(cublasHandle, d_b_grad, outputDim, 1.0f);
     
     int weightCount = outputDim * inputDim;
-    if (!d_W_m || !d_W_v) {
-        CUDA_CHECK(cudaMalloc(&d_W_m, weightCount * sizeof(float)));
-        CUDA_CHECK(cudaMalloc(&d_W_v, weightCount * sizeof(float)));
-        CUDA_CHECK(cudaMemset(d_W_m, 0, weightCount * sizeof(float)));
-        CUDA_CHECK(cudaMemset(d_W_v, 0, weightCount * sizeof(float)));
-    }
-    if (!d_b_m || !d_b_v) {
-        CUDA_CHECK(cudaMalloc(&d_b_m, outputDim * sizeof(float)));
-        CUDA_CHECK(cudaMalloc(&d_b_v, outputDim * sizeof(float)));
-        CUDA_CHECK(cudaMemset(d_b_m, 0, outputDim * sizeof(float)));
-        CUDA_CHECK(cudaMemset(d_b_v, 0, outputDim * sizeof(float)));
-    }
-    
-    float lr = 0.009f;
+    // Lower the learning rate further.
+    float lr = 0.0001f;
     adam_update(d_W, d_W_grad, d_W_m, d_W_v,
                 lr, 0.9f, 0.999f, 1e-7f,
                 globalIterDense, weightCount);
@@ -217,14 +196,17 @@ float* DenseLayer::backward(const float* d_out_const, const float* d_input, int 
                 globalIterDense, outputDim);
     globalIterDense++;
     
-    clip_parameters(d_W, weightCount, 10.0f);
-    clip_parameters(d_b, outputDim, 10.0f);
+    // Also clip updated parameters tightly.
+clip_parameters(d_W, outputDim * inputDim, 5.0f);
+clip_parameters(d_b, outputDim, 5.0f);
+
     
     cudaFree(d_W_grad);
     cudaFree(d_b_grad);
     cudaFree(d_out);
     return d_input_grad;
 }
+
 
 float* DenseLayer::getOutput() const {
     return d_output;

@@ -23,7 +23,6 @@ set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-relaxed-constexpr")
 
 # ---- Begin Python and NumPy detection ----
-# Find Python3 (Interpreter, Development headers, NumPy)
 find_package(Python3 COMPONENTS Interpreter Development NumPy REQUIRED)
 message(STATUS "Python include dirs: ${Python3_INCLUDE_DIRS}")
 message(STATUS "Python libraries: ${Python3_LIBRARIES}")
@@ -55,9 +54,16 @@ include_directories(${Python3_NumPy_INCLUDE_DIRS})
 link_directories("C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.8/lib/x64")
 link_directories(${PROJECT_SOURCE_DIR}/test/gtest/libs)
 
-# Gather all source files recursively from the src directory.
+# 🔹 Gather all source files recursively from the src directory.
 file(GLOB_RECURSE SRC_CPP_FILES "${PROJECT_SOURCE_DIR}/src/*.cpp")
+# Exclude cnn_model.cpp and train_evaluate.cpp from the list:
+list(REMOVE_ITEM SRC_CPP_FILES "${PROJECT_SOURCE_DIR}/src/cnn_model.cpp")
+list(REMOVE_ITEM SRC_CPP_FILES "${PROJECT_SOURCE_DIR}/src/train_evaluate.cpp")
+
 file(GLOB_RECURSE SRC_CU_FILES  "${PROJECT_SOURCE_DIR}/src/*.cu")
+
+# 🔹 Ensure tensor_ops.cu is explicitly included in compilation.
+list(APPEND SRC_CU_FILES "${PROJECT_SOURCE_DIR}/src/utils/tensor_ops.cu")
 
 # Mark files that contain CUDA kernel launches to be compiled as CUDA.
 set_source_files_properties(${PROJECT_SOURCE_DIR}/src/layers/conv_layer.cpp PROPERTIES LANGUAGE CUDA)
@@ -65,16 +71,18 @@ set_source_files_properties(${PROJECT_SOURCE_DIR}/src/layers/dense_layer.cpp PRO
 set_source_files_properties(${PROJECT_SOURCE_DIR}/src/layers/activation_layer.cpp PROPERTIES LANGUAGE CUDA)
 set_source_files_properties(${PROJECT_SOURCE_DIR}/src/layers/pooling_layer.cpp PROPERTIES LANGUAGE CUDA)
 set_source_files_properties(${PROJECT_SOURCE_DIR}/src/layers/softmax_layer.cpp PROPERTIES LANGUAGE CUDA)
-set_source_files_properties(${PROJECT_SOURCE_DIR}/src/cnn_model.cpp PROPERTIES LANGUAGE CUDA)
+# Omit cnn_model.cpp properties entirely since it has been removed:
+#set_source_files_properties(${PROJECT_SOURCE_DIR}/src/cnn_model.cpp PROPERTIES LANGUAGE CUDA)
+set_source_files_properties(${PROJECT_SOURCE_DIR}/src/utils/tensor_ops.cu PROPERTIES LANGUAGE CUDA)  # 🔹 Ensure tensor_ops.cu is treated correctly
 
-# Create the main executable from all source files.
+# 🔹 Create the main executable from all source files.
 add_executable(low_level_exe ${SRC_CPP_FILES} ${SRC_CU_FILES})
 set_target_properties(low_level_exe PROPERTIES 
     CUDA_SEPARABLE_COMPILATION ON
     RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}
 )
 
-# Link the required CUDA libraries and use the imported Python3 target.
+# 🔹 Link the required CUDA libraries and Tensor Ops module.
 target_link_libraries(low_level_exe 
     cudnn
     cublas

@@ -9,7 +9,7 @@ void adam_update(float* d_param, const float* d_grad,
                  float* d_m, float* d_v,
                  float learning_rate, float beta1, float beta2,
                  float epsilon, float globalIter, int size) {
-    printf("adam_update: updating %d elements, lr=%f, globalIter=%f\n", size, learning_rate, globalIter);
+    //printf("adam_update: updating %d elements, lr=%f, globalIter=%f\n", size, learning_rate, globalIter);
     cudaDeviceSynchronize();
 }
 

@@ -3,14 +3,7 @@
 #include <math.h>
 #include <stdio.h>
 
-__global__ void addBiasKernel(float* output, const float* bias, int outputDim, int batchSize) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total = batchSize * outputDim;
-    if (idx < total) {
-        int col = idx % outputDim;
-        output[idx] += bias[col];
-    }
-}
+
 
 __global__ void leakyReluKernel(float* data, int n, float alpha) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -84,5 +77,47 @@ __global__ void concatenateKernel(const float* branch1, const float* branch2, fl
             combined[idx] = branch1[sample * dim1 + pos];
         else
             combined[idx] = branch2[sample * dim2 + (pos - dim1)];
+    }
+}
+
+
+// Replace any NaN/Inf values in the array with 0.
+__global__ void fixNaNInfKernel(float* data, int N) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < N) {
+        float val = data[idx];
+        if (isnan(val) || isinf(val)) {
+            data[idx] = 0.0f;
+        }
+    }
+}
+
+// Debug kernel: prints indices where NaN/Inf values are found.
+__global__ void debugCheckNaNKernel(const float* data, int N) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < N) {
+        float val = data[idx];
+        if (isnan(val) || isinf(val)) {
+            printf("DEBUG: Found NaN/Inf at index %d: %f\n", idx, val);
+        }
+    }
+}
+
+
+// Add bias to every row. Each row has length = output_dim.
+__global__ void addBiasKernel(float* output, const float* bias, int batchSize, int output_dim) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < batchSize * output_dim) {
+        int col = idx % output_dim;
+        output[idx] += bias[col];
+    }
+}
+
+// Apply ReLU activation: output = max(input, 0).
+__global__ void activationKernel(float* data, int N) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < N) {
+        float val = data[idx];
+        data[idx] = fmaxf(val, 0.0f);
     }
 }

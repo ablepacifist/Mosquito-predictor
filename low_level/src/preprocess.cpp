@@ -421,4 +421,18 @@ void preprocessData(const std::string &filename,
     X_weather_test.assign(all_weather.begin() + val_end, all_weather.end());
     X_site_test.assign(all_site.begin() + val_end, all_site.end());
     y_test.assign(all_labels.begin() + val_end, all_labels.end());
+
+    // --- Debug Print: Show first 5 samples from training set.
+    std::cout << "----- Preprocessed Data Debug (first 5 training samples) -----" << std::endl;
+    int numSamplesToPrint = std::min(5, static_cast<int>(X_weather_train.size()));
+    for (int i = 0; i < numSamplesToPrint; i++) {
+        std::cout << "Sample " << i << " Weather: ";
+        for (double val : X_weather_train[i])
+            std::cout << val << " ";
+        std::cout << "\nSample " << i << " Site: ";
+        for (double val : X_site_train[i])
+            std::cout << val << " ";
+        std::cout << "\nLabel: " << y_train[i] << std::endl;
+        std::cout << "--------------------------------------------" << std::endl;
+    }
 }

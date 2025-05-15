@@ -1,4 +1,5 @@
 #include <iostream>
+#include <error_checking.h>
 __global__ void checkForInvalidValues(float* array, int size, int* flag) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < size) {
