@@ -1,122 +1,101 @@
-#include "../include/cnn_model.h"
-#include "../include/error_checking.h"
-#include "../include/preprocess.h" 
-
+#include "../include/simplified_cnn_model.h"
+#include "../include/utils/error_checking.h"
+#include "../include/preprocess.h"
+#include "../include/utils/weight_init.h"
 #include <iostream>
 #include <vector>
 #include <string>
+#include <algorithm>
+#include <cmath>
+
+//------------------------------------------------------------------------------
+// One-hot encode labels. For binary classification, label 0 becomes [1, 0] and label 1 becomes [0, 1].
+std::vector<float> oneHotEncodeLabels(const std::vector<int>& labels, int num_classes) {
+    std::vector<float> encoded(labels.size() * num_classes, 0.0f);
+    for (size_t i = 0; i < labels.size(); i++) {
+        int idx = labels[i];
+        if (idx < 0 || idx >= num_classes) {
+            std::cerr << "Error: Label out of range at sample " << i << ": " << idx << std::endl;
+            exit(EXIT_FAILURE);
+        }
+        encoded[i * num_classes + idx] = 1.0f;
+    }
+    return encoded;
+}
 
 int main() {
-    // Path to your CSV file.
-    std::string csvFile = "data/combined_data.csv";
+    // Seed randomness and specify the CSV file.
+    seedRandom();
+    std::string csvFile = "data/combined_data.csv";  // Ensure the file exists
+    int batchSize = 64;
+    
+    // For binary classification (breeding: 0 or 1), we use 2 classes.
+    int num_classes = 2;
+    
+    // Define the input shapes; adjust these if your actual data has different dimensions.
+    int weather_shape[4] = { batchSize, 4, 5, 1 };
+    int site_shape[2] = { batchSize, 10 };
 
-    // Define input shapes.
-    const int batchSize = 128;
-    int weather_input_shape[4] = { batchSize, 4, 5, 1 };  // Weather branch: [batchSize, 4, 1, 1]
-    int site_input_shape[2] = { batchSize, 10 };          // Site branch: [batchSize, 10]
-    const int num_classes = 10;                          // Number of output classes.
+    // Initialize the model.
+    SimplifiedCNNModel model(weather_shape, site_shape, num_classes);
 
-    // Instantiate the CNN model.
-    CNNModel model(weather_input_shape, site_input_shape, num_classes);
+    // Data containers for the preprocessed data.
+    std::vector<std::vector<double>> X_weather_train, X_site_train;
+    std::vector<std::vector<double>> X_weather_val, X_site_val;
+    std::vector<std::vector<double>> X_weather_test, X_site_test;
+    std::vector<int> y_train, y_val, y_test;
 
-    // -----------------------------------------------------------------
-    // Preprocess the data.
-    // Assuming preprocessData() loads and splits the CSV into training, validation, and test sets.
-    // Containers for preprocessed data.
-    std::vector<std::vector<double>> X_weather_train_vec, X_site_train_vec;
-    std::vector<int> y_train;
-    std::vector<std::vector<double>> X_weather_val_vec, X_site_val_vec;
-    std::vector<int> y_val;
-    std::vector<std::vector<double>> X_weather_test_vec, X_site_test_vec;
-    std::vector<int> y_test;
+    // Preprocess the CSV data. (This function should split your CSV data into training,
+    // validation, and test sets and normalize/standardize the inputs as needed.)
+    preprocessData(csvFile, X_weather_train, X_site_train, y_train,
+                   X_weather_val, X_site_val, y_val,
+                   X_weather_test, X_site_test, y_test);
 
-    preprocessData(csvFile,
-                   X_weather_train_vec, X_site_train_vec, y_train,
-                   X_weather_val_vec, X_site_val_vec, y_val,
-                   X_weather_test_vec, X_site_test_vec, y_test);
+    // Convert the integer labels into one-hot vectors.
+    std::vector<float> y_train_onehot = oneHotEncodeLabels(y_train, num_classes);
+    std::vector<float> y_val_onehot   = oneHotEncodeLabels(y_val, num_classes);
+    std::vector<float> y_test_onehot  = oneHotEncodeLabels(y_test, num_classes);
 
-    // -----------------------------------------------------------------
-    // Flatten the data for training, validation, and testing.
-    // Training data.
-    int num_train_samples = static_cast<int>(y_train.size());
-    int weather_sample_size = static_cast<int>(X_weather_train_vec[0].size());
-    int site_sample_size = static_cast<int>(X_site_train_vec[0].size());
+    // Flatten the nested feature vectors for the weather branch (training data).
+    std::vector<float> X_weather_train_flat;
+    for (const auto &row : X_weather_train)
+         X_weather_train_flat.insert(X_weather_train_flat.end(), row.begin(), row.end());
 
-    std::vector<float> flat_weather_train(num_train_samples * weather_sample_size);
-    for (int i = 0; i < num_train_samples; i++) {
-        for (int j = 0; j < weather_sample_size; j++) {
-            flat_weather_train[i * weather_sample_size + j] = static_cast<float>(X_weather_train_vec[i][j]);
-        }
-    }
+    // Flatten the nested feature vectors for the site branch (training data).
+    std::vector<float> X_site_train_flat;
+    for (const auto &row : X_site_train)
+         X_site_train_flat.insert(X_site_train_flat.end(), row.begin(), row.end());
 
-    std::vector<float> flat_site_train(num_train_samples * site_sample_size);
-    for (int i = 0; i < num_train_samples; i++) {
-        for (int j = 0; j < site_sample_size; j++) {
-            flat_site_train[i * site_sample_size + j] = static_cast<float>(X_site_train_vec[i][j]);
-        }
-    }
+    // Similarly, flatten the validation data.
+    std::vector<float> X_weather_val_flat;
+    for (const auto &row : X_weather_val)
+         X_weather_val_flat.insert(X_weather_val_flat.end(), row.begin(), row.end());
+    
+    std::vector<float> X_site_val_flat;
+    for (const auto &row : X_site_val)
+         X_site_val_flat.insert(X_site_val_flat.end(), row.begin(), row.end());
+    
+    // And flatten the test data.
+    std::vector<float> X_weather_test_flat;
+    for (const auto &row : X_weather_test)
+         X_weather_test_flat.insert(X_weather_test_flat.end(), row.begin(), row.end());
+    
+    std::vector<float> X_site_test_flat;
+    for (const auto &row : X_site_test)
+         X_site_test_flat.insert(X_site_test_flat.end(), row.begin(), row.end());
 
-    std::vector<float> flat_y_train(num_train_samples * num_classes, 0.0f);
-    for (int i = 0; i < num_train_samples; i++) {
-        int label = y_train[i];
-        flat_y_train[i * num_classes + label] = 1.0f;
-    }
+    // ---------------------------
+    // Train the model with the real data.
+    int epochs = 50;
+    model.train(X_weather_train_flat.data(), X_site_train_flat.data(), y_train_onehot.data(),
+                X_weather_train.size(), batchSize, epochs,
+                X_weather_val_flat.data(), X_site_val_flat.data(), y_val_onehot.data(),
+                X_weather_val.size());
 
-    // Validation data.
-    int num_val_samples = static_cast<int>(y_val.size());
-    std::vector<float> flat_weather_val(num_val_samples * weather_sample_size);
-    for (int i = 0; i < num_val_samples; i++) {
-        for (int j = 0; j < weather_sample_size; j++) {
-            flat_weather_val[i * weather_sample_size + j] = static_cast<float>(X_weather_val_vec[i][j]);
-        }
-    }
-
-    std::vector<float> flat_site_val(num_val_samples * site_sample_size);
-    for (int i = 0; i < num_val_samples; i++) {
-        for (int j = 0; j < site_sample_size; j++) {
-            flat_site_val[i * site_sample_size + j] = static_cast<float>(X_site_val_vec[i][j]);
-        }
-    }
-
-    std::vector<float> flat_y_val(num_val_samples * num_classes, 0.0f);
-    for (int i = 0; i < num_val_samples; i++) {
-        int label = y_val[i];
-        flat_y_val[i * num_classes + label] = 1.0f;
-    }
-
-    // Test data.
-    int num_test_samples = static_cast<int>(y_test.size());
-    std::vector<float> flat_weather_test(num_test_samples * weather_sample_size);
-    for (int i = 0; i < num_test_samples; i++) {
-        for (int j = 0; j < weather_sample_size; j++) {
-            flat_weather_test[i * weather_sample_size + j] = static_cast<float>(X_weather_test_vec[i][j]);
-        }
-    }
-
-    std::vector<float> flat_site_test(num_test_samples * site_sample_size);
-    for (int i = 0; i < num_test_samples; i++) {
-        for (int j = 0; j < site_sample_size; j++) {
-            flat_site_test[i * site_sample_size + j] = static_cast<float>(X_site_test_vec[i][j]);
-        }
-    }
-
-    std::vector<float> flat_y_test(num_test_samples * num_classes, 0.0f);
-    for (int i = 0; i < num_test_samples; i++) {
-        int label = y_test[i];
-        flat_y_test[i * num_classes + label] = 1.0f;
-    }
-
-    // -----------------------------------------------------------------
-    // Train the network.
-    int epochs = 25;
-    model.train(flat_weather_train.data(), flat_site_train.data(), flat_y_train.data(),
-                num_train_samples, batchSize, epochs,
-                flat_weather_val.data(), flat_site_val.data(), flat_y_val.data(),
-                num_val_samples);
-
-    // Evaluate on test data.
-    float test_accuracy = model.evaluate(flat_weather_test.data(), flat_site_test.data(), flat_y_test.data(), num_test_samples);
-    std::cout << "Test Accuracy: " << test_accuracy << std::endl;
+    // Evaluate the model on the test data.
+    float accuracy = model.evaluate(X_weather_test_flat.data(), X_site_test_flat.data(),
+                                    y_test_onehot.data(), X_weather_test.size());
+    std::cout << "Final test accuracy: " << accuracy * 100.0f << "%" << std::endl;
 
     return 0;
 }

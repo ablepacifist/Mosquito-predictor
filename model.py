@@ -105,9 +105,18 @@ def plot_validation_loss(history):
     plt.legend()
     plt.show()
 
+def print_first_10_data_points(X_weather, X_site):
+    print("First 10 data points for Weather Branch:")
+    for i in range(min(10, len(X_weather))):
+        print(f"Data Point {i + 1}: {X_weather[i]}")
+
+    print("\nFirst 10 data points for Site Branch:")
+    for i in range(min(10, len(X_site))):
+        print(f"Data Point {i + 1}: {X_site[i]}")
+
 file_path = 'combined_data.csv'
 X_weather_train, X_site_train, y_train, X_weather_val, X_site_val, y_val, X_weather_test, X_site_test, y_test = load_and_preprocess_data(file_path)
-
+print_first_10_data_points(X_weather_train, X_site_train)
 print("begin training model")
 history, test_accuracy = train_and_evaluate(X_weather_train, X_site_train, y_train, X_weather_val, X_site_val, y_val, X_weather_test, X_site_test, y_test)
 

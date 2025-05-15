@@ -1,179 +1,179 @@
 # Low Level Project
 
-This project is a CUDA-enabled application that performs data preprocessing and neural network training for mosquito breeding prediction. The application includes functions to:
+This project is a CUDA-enabled application for data preprocessing and neural network training, with a primary focus on predicting mosquito breeding activity. It uses GPU acceleration (via CUDA/cuDNN) to implement deep learning routines and is built in modern C++.
 
-- Parse dates and convert them to ordinal values  
-- Perform standard scaling on numerical datasets  
-- Apply one-hot encoding to categorical data  
-- Fill missing values in data columns  
-- Preprocess CSV data into training, validation, and test splits
+## Overview
 
-In addition, the project implements a convolutional neural network (CNN) using CUDA/cuDNN for classification. The CNNModel supports forward and backward passes, weight updates via SGD, and evaluation on test data.
+The application performs the following:
+- **Data Preprocessing:**  
+  - Parse dates and convert them to ordinal values  
+  - Standard scale numerical datasets  
+  - One-hot encode categorical data  
+  - Fill missing values  
+  - Read and split CSV data (using RapidCSV) into training, validation, and test sets
 
-A suite of tests (located in the `test` folder) verifies the functionality of the preprocessing routines.
-
----
-
-## Dependencies
-
-- **C++ Compiler:** A compiler supporting C++17 (e.g., Visual Studio, GCC, Clang)
-- **CMake:** Version 3.10 or later
-- **CUDA Toolkit:** Version 12.8 (with libraries: `cuda`, `cudart`, `cudnn`, `cublas`)
-- **RapidCSV:** A header-only library for CSV parsing (used in `src/preprocess.cpp`)
-- **Standard C++ Libraries:** `<iostream>`, `<vector>`, `<string>`, `<sstream>`, `<iomanip>`, `<cassert>`, `<cmath>`, `<ctime>`, `<unordered_map>`
-
-*Ensure the CUDA Toolkit and RapidCSV (if not bundled) are installed and that the include/library paths in the `CMakeLists.txt` match your system’s installation.*
-
----
+- **Neural Network Training:**  
+  The core of the application is a custom neural network that employs a multi-branch architecture:
+  
+  **Weather Branch (CNN-based):**
+  - **Input:** Weather data in a 4×5×1 tensor per sample  
+  - **Convolution:** A ConvLayer applies 16 filters with a 3×1 kernel (with appropriate padding) to extract spatial features  
+  - **Flatten & Dense Projection:** The convolution output (flattened to 80 features) is then fed to a DenseLayer that projects it to 64 features using ReLU activation  
+  
+  **Site Branch (Dense-based):**
+  - **Input:** Site data as a flat vector (e.g., 10 features per sample)  
+  - **Dense:** A DenseLayer maps these 10 features to 64 features using ReLU activation
+  
+  **Fusion and Classification:**
+  - **Concatenation:** The outputs of the weather and site branches (each 64-dimensional) are concatenated into a 128-dimensional vector  
+  - **Fully Connected Layers:**  
+    - Dense1: 128 → 128 (ReLU)  
+    - Dense2: 128 → 64 (ReLU)  
+    - Dense3: 64 → 32 (ReLU)  
+    - Dense4: 32 → 16 (ReLU)  
+  - **Output Layer:** Maps 16 features to *num_classes* logits. (The softmax is applied during loss computation.)
+  
+During training, the backward pass mirrors this structure: The gradient from the output is backpropagated through the fully connected layers; the concatenated gradient is then split—one half is sent backward through the weather branch (first through the projection layer, then the convolution layer) while the other half is sent through the site branch.
 
 ## Directory Structure
 
+Below is a text-based diagram of the current project structure:
+
 ```
 low_level/
-├── CMakeLists.txt
-├── include/            
-│   ├── preprocess.h         # Preprocessing function declarations
-│   └── cnn_model.h          # CNNModel class declaration
-├── src/                
-│   ├── main.cpp             # Main program source file
-│   ├── preprocess.cpp       # Preprocessing function implementations
-│   └── cnn_model.cpp        # CNNModel implementation (forward/backward/weight update)
-├── test/                  
-│   └── test_preprocess.cpp  # Unit tests for preprocessing and related functions
-├── data/                  
-│   └── combined_data.csv    # Real dataset in CSV format
-└── README.md                # This file
+├── CMakeLists.txt               # CMake build configuration (excludes old cnn_model and train_evaluate)
+├── README.md                    # This file
+├── .gitignore                   # Git ignore rules
+├── data/                        # Dataset folder
+│   ├── combined_data.csv        # Main CSV dataset
+│   └── combined_data_filtered.csv
+├── include/                     # Header files
+│   ├── preprocess.h             # Data preprocessing declarations
+│   ├── SimplifiedCNNModel.h     # Model class declaration (includes both branches)
+│   └── [other headers...]
+├── src/                         # Source files
+│   ├── main.cpp                 # Entry point of the application
+│   ├── preprocess.cpp           # Preprocessing function implementations
+│   ├── simple_model.cu          # Implementation of SimplifiedCNNModel (forward/backward)
+│   ├── layers/                  # Neural network layers
+│   │   ├── conv_layer.cu        # Convolution layer implementation using cuDNN
+│   │   ├── dense_layer.cpp       # Fully connected (dense) layer implementation
+│   │   ├── activation_layer.cu   # Activation routines
+│   │   ├── pooling_layer.cpp     # Pooling layer implementation
+│   │   └── softmax_layer.cpp     # Softmax function implementation
+│   ├── optimizers/              # Optimizer implementations (e.g., Adam updates)
+│   │   └── optimizers.cu 
+│   └── utils/                   # Utility functions
+│       ├── conv_kernels.cu      # CUDA kernels for convolution utilities (bias addition, etc.)
+│       ├── dense_kernels.cu     # CUDA kernels for dense layer support
+│       ├── error_checking.cpp   # Error checking macros & routines
+│       ├── memory_management.cu # Helper functions for memory allocation/free
+│       └── tensor_ops.cu        # CUDA kernels for tensor concatenation, splitting, etc.
+├── test/                        # Test suite folder
+│   ├── gtest/                   # Google Test and friends for unit testing
+│   └── test_preprocess.cpp      # Unit tests for preprocessing functions
+└── [other files/scripts...]     # Possibly Python scripts for plotting training graphs, etc.
 ```
 
 ## Build Instructions
 
 1. **Clone or Download the Repository**  
-   Navigate to the `low_level` project folder (this is the project root).
+   Navigate to the `low_level/` folder (project root).
 
-2. **Configure and Generate Build Files**  
-   Open your terminal (or PowerShell on Windows) in the `low_level` folder and run:
+2. **Configure Build Files using CMake**  
+   Open your terminal (or PowerShell on Windows) in the project root and run:
    ```bash
    cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
    ```
-   This command will generate the build system in the `build` directory.
-
-   **Note:** The `CMakeLists.txt` is configured to output executables to the project root by using:
-   ```cmake
-   set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR})
-   set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG ${PROJECT_SOURCE_DIR})
-   set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${PROJECT_SOURCE_DIR})
-   ```
+   This generates the build system in the `build/` directory.
 
 3. **Build the Project**  
    Run:
    ```bash
    cmake --build build
    ```
-   After a successful build, the executables (e.g., `low_level_exe` and `low_level_tests`) will appear in the project root.
-
----
+   Executables (e.g., `low_level_exe` and `low_level_tests`) will be placed in the project root, as specified by:
+   ```cmake
+   set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR})
+   ```
 
 ## Running the Code
 
 ### Main Executable
 
 To run the main application:
-
-- **On Windows (PowerShell/CMD):**
+- **Windows (PowerShell/CMD):**
   ```powershell
   .\low_level_exe.exe
   ```
-- **On Linux/macOS (Terminal):**
+- **Linux/macOS (Terminal):**
   ```bash
   ./low_level_exe
   ```
 
-The main executable performs preprocessing on the real data (from `data/combined_data.csv`), flattens the data into contiguous arrays, feeds it into the CNNModel, and outputs training progress as well as final test accuracy.
+The main executable loads the data (from `data/combined_data.csv`), performs preprocessing, feeds the data into the SimplifiedCNNModel, and outputs training progress along with final test accuracy.
 
 ### Test Executable
 
 To run the test suite:
-
-- **On Windows:**
+- **Windows:**
   ```powershell
   .\low_level_tests.exe
   ```
-- **On Linux/macOS:**
+- **Linux/macOS:**
   ```bash
   ./low_level_tests
   ```
 
-The test executable runs unit tests for the preprocessing functions such as date parsing, scaling, one-hot encoding, and missing value handling. Test results will print to the terminal.
-
----
+Tests include unit tests for individual preprocessing functions and basic CUDA/cuDNN functionality.
 
 ## Cleaning the Project
 
 ### Using CMake's Clean Target
 
-Run:
+Execute:
 ```bash
 cmake --build build --target clean
 ```
-This command removes most build artifacts in the `build` directory.
+This removes build artifacts in the `build` directory.
 
-### Manual Clean from the Root Directory
+### Manual Clean
 
-To fully clean the project (removing `build` and generated executables):
-
-- **On Linux/macOS:**
+To fully clean the project:
+- **Linux/macOS:**
   ```bash
   rm -rf build
   rm -f low_level_exe low_level_tests
   ```
-- **On Windows (Command Prompt):**
+- **Windows (CMD):**
   ```batch
   rmdir /S /Q build
   del low_level_exe.exe
   del low_level_tests.exe
   ```
-- **On Windows (PowerShell):**
+- **Windows (PowerShell):**
   ```powershell
   Remove-Item -Recurse -Force build
   Remove-Item low_level_exe.exe, low_level_tests.exe
   ```
-For convenience, consider creating a script (e.g., `clean_project.sh` or `clean_project.bat`) in the project root.
-
----
 
 ## Troubleshooting
 
-- **Build Failures:**  
-  Verify that all dependencies are installed and that the CUDA Toolkit paths in the `CMakeLists.txt` are correct.
-
-- **Executable Not Found in Root:**  
-  Ensure `CMAKE_RUNTIME_OUTPUT_DIRECTORY` is set correctly in the CMake configuration. A clean rebuild may be needed when configuration changes.
-
-- **Test Failures:**  
-  Review test output in the terminal. The tests include assertions and debug prints to help pinpoint issues in preprocessing or data formatting.
-
-- **"Vector Subscript Out of Range" Errors:**  
-  Ensure that the size of inner vectors produced by your preprocessing exactly matches the dimensions expected by your flattening code (e.g., weather feature vectors should have 4 elements).
-
----
+- **Build Failures:** Ensure that all dependencies (C++17 compiler, CUDA Toolkit v12.8, cuDNN, cuBLAS, Python3 with NumPy, RapidCSV) are correctly installed and that CMake paths are set correctly.
+- **Runtime Errors:**  
+  - Verify that your data preprocessing produces correctly sized arrays matching the input dimensions expected by the network.
+  - Use the debug printouts within the network layers to diagnose issues (e.g., NaN/Inf values).
+- **Test Failures:** Review output from `low_level_tests.exe` for issues in individual components; unit tests can help narrow down faulty areas in data preprocessing or CUDA memory management.
 
 ## Additional Notes
 
 - **Preprocessing Functions:**  
-  The functions declared in `include/preprocess.h` (and defined in `src/preprocess.cpp`) include:
-  - `parseDate` and `dateToOrdinal`
-  - `standardScale`
-  - `oneHotEncode`
-  - `fillMissingValues`
-  - `preprocessData` (which loads a CSV via RapidCSV and splits the data into training, validation, and test sets)
-  
-- **CNNModel Implementation:**  
-  The CNNModel (declared in `include/cnn_model.h` and defined in `src/cnn_model.cpp`) performs convolution, activation, global average pooling, softmax, and includes training (with forward, backward, and weight update routines) as well as evaluation.
+  Implemented in `src/preprocess.cpp` with declarations in `include/preprocess.h`. These include date parsing, scaling, one-hot encoding, and missing value handling.
 
-- **CUDA & cuDNN:**  
-  This project makes heavy use of CUDA for GPU acceleration and cuDNN for deep learning routines. Ensure that the CUDA toolkit installed on your machine is compatible with your hardware.
+- **Model Implementation:**  
+  The neural network is implemented in `src/simple_model.cu` and organized across multiple modules under `src/layers/`, `src/optimizers/`, and `src/utils/`. The new model architecture consists of a convolution branch for weather input, a dense branch for site data, and a fully connected network for final classification.
 
-- **Environment Variables:**  
-  Make sure your system environment paths (e.g., `PATH` on Windows) include directories for CUDA binaries (e.g., `C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.8/bin`).
+- **CUDA and cuDNN:**  
+  The project leverages CUDA for high-performance GPU computation and cuDNN for optimized deep learning routines. Ensure that the correct versions of these libraries are installed and that your system’s environment (e.g., PATH on Windows) contains the paths to CUDA binaries.
 
 ---
