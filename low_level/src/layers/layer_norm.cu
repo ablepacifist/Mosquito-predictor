@@ -3,16 +3,17 @@
 #include <math.h>
 #include <stdio.h>
 
+// CUDA kernel for layer normalization across features for each sample in a batch.
 __global__ void layerNormForwardKernel(const float *input, float *output, int featureSize, float epsilon) {
-    int sample = blockIdx.x;   // one block per sample
+    int sample = blockIdx.x;   // Each block handles one sample
     int tid = threadIdx.x;
-    
-    // Compute mean.
+
+    // Compute mean for this sample
     float sum = 0.0f;
     for (int i = tid; i < featureSize; i += blockDim.x) {
         sum += input[sample * featureSize + i];
     }
-    __shared__ float sharedSum[256];  // Adjust if needed.
+    __shared__ float sharedSum[256];
     sharedSum[tid] = sum;
     __syncthreads();
     for (int stride = blockDim.x / 2; stride > 0; stride /= 2) {
@@ -21,8 +22,8 @@ __global__ void layerNormForwardKernel(const float *input, float *output, int fe
         __syncthreads();
     }
     float mean = sharedSum[0] / featureSize;
-    
-    // Compute variance.
+
+    // Compute variance for this sample
     float varSum = 0.0f;
     for (int i = tid; i < featureSize; i += blockDim.x) {
         float diff = input[sample * featureSize + i] - mean;
@@ -36,13 +37,12 @@ __global__ void layerNormForwardKernel(const float *input, float *output, int fe
             sharedVar[tid] += sharedVar[tid + stride];
         __syncthreads();
     }
-    
+
     float variance = sharedVar[0] / featureSize;
-    // Clamp variance
-    variance = fmaxf(variance, epsilon);
+    variance = fmaxf(variance, epsilon); // Clamp variance for stability
     float normFactor = rsqrtf(variance + epsilon);
-    
-    // Normalize and sanitize output.
+
+    // Normalize and write output for this sample
     for (int i = tid; i < featureSize; i += blockDim.x) {
         int idx = sample * featureSize + i;
         float normalized_val = (input[idx] - mean) * normFactor;
@@ -53,9 +53,9 @@ __global__ void layerNormForwardKernel(const float *input, float *output, int fe
     }
 }
 
+// Host function to launch layer normalization kernel for a batch of samples.
 extern "C" void layerNormForward(const float *d_input, float *d_output, int batchSize, int featureSize) {
     int threads = 256;
-    // One block per sample.
     layerNormForwardKernel<<<batchSize, threads>>>(d_input, d_output, featureSize, LAYER_NORM_EPSILON);
     cudaDeviceSynchronize();
 }
