@@ -1,5 +1,7 @@
 #include <iostream>
 #include <error_checking.h>
+
+// CUDA kernel: sets flag if any element in array is NaN or Inf
 __global__ void checkForInvalidValues(float* array, int size, int* flag) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < size) {
@@ -9,6 +11,7 @@ __global__ void checkForInvalidValues(float* array, int size, int* flag) {
     }
 }
 
+// Checks device array for NaN or Inf; prints error and exits if found
 void verifyArray(float* d_array, int size, const char* msg) {
     int *d_flag;
     CUDA_CHECK(cudaMalloc(&d_flag, sizeof(int)));

@@ -22,7 +22,7 @@ void softmaxForward(
         &beta,
         outputDesc, d_output));
 
-    // --- Optional Debug --- //
+    // ---  Debug --- //
     int n, c, h, w;
     cudnnDataType_t dataType;
     CUDNN_CHECK(cudnnGetTensor4dDescriptor(outputDesc, &dataType, &n, &c, &h, &w,

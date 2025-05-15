@@ -24,8 +24,7 @@ std::vector<float> oneHotEncodeLabels(const std::vector<int>& labels, int num_cl
 }
 
 int main() {
-    // Seed randomness and specify the CSV file.
-    seedRandom();
+    //specify the CSV file.
     std::string csvFile = "data/combined_data.csv";  // Ensure the file exists
     int batchSize = 64;
     

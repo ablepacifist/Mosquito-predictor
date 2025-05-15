@@ -1,5 +1,6 @@
 #include "tensor_ops.h"
 
+// CUDA kernel: concatenates two input arrays into one output array
 __global__ void concatenate(const float* __restrict__ input1, 
                             const float* __restrict__ input2, 
                             float* __restrict__ output,

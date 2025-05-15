@@ -3,8 +3,7 @@
 #include <math.h>
 #include <stdio.h>
 
-
-
+// Leaky ReLU activation for each element
 __global__ void leakyReluKernel(float* data, int n, float alpha) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
@@ -13,6 +12,7 @@ __global__ void leakyReluKernel(float* data, int n, float alpha) {
     }
 }
 
+// Computes derivative of leaky ReLU and multiplies with grad
 __global__ void leakyReluDerivativeKernel(const float* activated, float* grad, int totalElements, float alpha) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < totalElements) {
@@ -22,6 +22,7 @@ __global__ void leakyReluDerivativeKernel(const float* activated, float* grad, i
     }
 }
 
+// Computes bias gradient by summing d_out over the batch for each output neuron
 __global__ void denseBiasGradientKernel(const float* d_out, float* d_b_grad, int batchSize, int outputDim) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < outputDim) {
@@ -33,6 +34,7 @@ __global__ void denseBiasGradientKernel(const float* d_out, float* d_b_grad, int
     }
 }
 
+// Splits concatenated gradient into two branches
 __global__ void splitConcatGradientKernel(const float* concatGrad, float* branch1Grad, float* branch2Grad, int batchSize, int halfDim) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int total = batchSize * halfDim * 2;
@@ -47,6 +49,7 @@ __global__ void splitConcatGradientKernel(const float* concatGrad, float* branch
     }
 }
 
+// Clips each element of input to [-clip_val, clip_val]
 __global__ void clipArrayKernel(const float* input, float* output, int n, float clip_val) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
@@ -60,6 +63,7 @@ __global__ void clipArrayKernel(const float* input, float* output, int n, float 
     }
 }
 
+// Launches kernel to clip array values
 void clipArray(const float* d_input, float* d_output, int n, float clip_val) {
     int blockSize = 256;
     int gridSize = (n + blockSize - 1) / blockSize;
@@ -67,6 +71,7 @@ void clipArray(const float* d_input, float* d_output, int n, float clip_val) {
     cudaDeviceSynchronize();
 }
 
+// Concatenates two branches into a single array per sample
 __global__ void concatenateKernel(const float* branch1, const float* branch2, float* combined, int dim1, int dim2, int batchSize) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int total = batchSize * (dim1 + dim2);
@@ -80,8 +85,7 @@ __global__ void concatenateKernel(const float* branch1, const float* branch2, fl
     }
 }
 
-
-// Replace any NaN/Inf values in the array with 0.
+// Sets any NaN or Inf values in data to zero
 __global__ void fixNaNInfKernel(float* data, int N) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < N) {
@@ -92,7 +96,7 @@ __global__ void fixNaNInfKernel(float* data, int N) {
     }
 }
 
-// Debug kernel: prints indices where NaN/Inf values are found.
+// Prints indices and values where NaN or Inf is found (for debugging)
 __global__ void debugCheckNaNKernel(const float* data, int N) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < N) {
@@ -103,8 +107,7 @@ __global__ void debugCheckNaNKernel(const float* data, int N) {
     }
 }
 
-
-// Add bias to every row. Each row has length = output_dim.
+// Adds bias to each output neuron for every sample in the batch
 __global__ void addBiasKernel(float* output, const float* bias, int batchSize, int output_dim) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < batchSize * output_dim) {
@@ -113,7 +116,7 @@ __global__ void addBiasKernel(float* output, const float* bias, int batchSize, i
     }
 }
 
-// Apply ReLU activation: output = max(input, 0).
+// Applies ReLU activation to each element
 __global__ void activationKernel(float* data, int N) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < N) {
